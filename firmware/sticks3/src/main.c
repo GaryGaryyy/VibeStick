@@ -11,7 +11,6 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/spi_master.h"
-#include "driver/usb_serial_jtag.h"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
@@ -28,7 +27,6 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "mbedtls/base64.h"
 #include "vibe_stick_ui_assets.h"
 #include "iot_button.h"
 #include "lvgl.h"
@@ -42,14 +40,10 @@
 #define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
 #define LCD_BACKLIGHT_PWM_HZ 5000
 #define LCD_BACKLIGHT_PWM_MAX 255
-#define LCD_BACKLIGHT_DEFAULT 60
+#define LCD_BACKLIGHT_DEFAULT 100
 #define LVGL_DRAW_BUF_LINES 24
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
-#define LCD_SLEEP_TIMEOUT_MS 5000
-#define USB_BRIDGE_PREFIX "VSJ1 "
-#define USB_BRIDGE_TIMEOUT_MS 220
-#define USB_BRIDGE_AUDIO_CHUNK_BYTES 768
 
 #define PIN_BUTTON_FRONT 11
 #define PIN_BUTTON_SIDE 12
@@ -140,7 +134,6 @@ static bool s_alert_sound_baseline_ready;
 static char s_recording_session_id[40];
 static bool s_display_awake = true;
 static int64_t s_last_user_activity_ms;
-static bool s_usb_bridge_active;
 
 static lv_display_t *s_display;
 static esp_lcd_panel_handle_t s_panel;
@@ -431,17 +424,6 @@ static void note_user_activity(void)
 {
     s_last_user_activity_ms = now_ms();
     set_display_awake(true);
-}
-
-static void maybe_sleep_display(void)
-{
-    if (!s_display_awake || s_recording_overlay_visible || vibe_audio_is_recording()) {
-        return;
-    }
-    int64_t idle_ms = now_ms() - s_last_user_activity_ms;
-    if (idle_ms >= LCD_SLEEP_TIMEOUT_MS) {
-        set_display_awake(false);
-    }
 }
 
 static void init_backlight(void)
@@ -770,7 +752,7 @@ static void create_ui(void)
     s_computer_title_label = make_label(screen, "电脑", FONT_CN,
                                         lv_color_hex(0x8a9099), 108, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_computer_title_label, LV_ALIGN_TOP_MID, 0, 130);
-    s_computer_name_label = make_wrap_label(screen, "Computer", FONT_CN,
+    s_computer_name_label = make_wrap_label(screen, "Computer", &lv_font_montserrat_14,
                                             lv_color_hex(0xf3f4f6), 108, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 150);
     s_project_label = make_wrap_label(screen, "s3", &lv_font_montserrat_12,
@@ -862,9 +844,9 @@ static void render_state(void)
     const bool quota_stale = implemented && display_state->quota_stale;
     const char *status_key = implemented ? display_state->status : "UNIMPLEMENTED";
 
-    lv_label_set_text(s_wifi_label, s_usb_bridge_active ? "USB" : (s_wifi_connected ? "WiFi" : "OFF"));
+    lv_label_set_text(s_wifi_label, s_wifi_connected ? "WiFi" : "OFF");
     lv_obj_set_style_text_color(s_wifi_label,
-                                (s_usb_bridge_active || s_wifi_connected) ? lv_color_hex(0xf3f4f6) : lv_color_hex(0x686e78),
+                                s_wifi_connected ? lv_color_hex(0xf3f4f6) : lv_color_hex(0x686e78),
                                 0);
     set_battery_ui(s_state.battery, s_state.battery_charging, s_state.usb_powered);
     if (provider->icon) {
@@ -1101,142 +1083,9 @@ static esp_err_t http_post_binary(const char *path, const uint8_t *body, size_t 
     return err;
 }
 
-static bool usb_bridge_should_try(void)
-{
-    return VIBE_STICK_USB_BRIDGE_ENABLED && s_state.usb_powered;
-}
-
-static void usb_bridge_request_id(char *request_id, size_t request_id_len)
-{
-    snprintf(request_id, request_id_len, "%08lx", (unsigned long)esp_random());
-}
-
-static void usb_bridge_drain_input(void)
-{
-    uint8_t discard[64];
-    while (usb_serial_jtag_read_bytes(discard, sizeof(discard), 0) > 0) {
-    }
-}
-
-static esp_err_t usb_bridge_read_response(const char *request_id, char *response, int response_len, int timeout_ms)
-{
-    char line[3072];
-    int used = 0;
-    const int64_t deadline = esp_timer_get_time() + ((int64_t)timeout_ms * 1000);
-    while (esp_timer_get_time() < deadline) {
-        uint8_t ch = 0;
-        int read = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(10));
-        if (read <= 0) {
-            continue;
-        }
-        if (ch == '\r') {
-            continue;
-        }
-        if (ch != '\n') {
-            if (used < (int)sizeof(line) - 1) {
-                line[used++] = (char)ch;
-            } else {
-                used = 0;
-            }
-            continue;
-        }
-
-        line[used] = '\0';
-        used = 0;
-        if (strncmp(line, USB_BRIDGE_PREFIX, strlen(USB_BRIDGE_PREFIX)) != 0) {
-            continue;
-        }
-        const char *payload = line + strlen(USB_BRIDGE_PREFIX);
-        cJSON *root = cJSON_Parse(payload);
-        if (!root) {
-            continue;
-        }
-        cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
-        cJSON *ok = cJSON_GetObjectItemCaseSensitive(root, "ok");
-        if (!cJSON_IsString(id) || strcmp(id->valuestring, request_id) != 0) {
-            cJSON_Delete(root);
-            continue;
-        }
-        if (!cJSON_IsTrue(ok)) {
-            cJSON_Delete(root);
-            return ESP_FAIL;
-        }
-        cJSON *body = cJSON_GetObjectItemCaseSensitive(root, "body");
-        if (response && response_len > 0) {
-            response[0] = '\0';
-            if (body) {
-                char *printed = cJSON_PrintUnformatted(body);
-                if (printed) {
-                    strlcpy(response, printed, response_len);
-                    cJSON_free(printed);
-                }
-            }
-        }
-        cJSON_Delete(root);
-        return ESP_OK;
-    }
-    return ESP_ERR_TIMEOUT;
-}
-
-static esp_err_t usb_bridge_send_request(cJSON *request, const char *request_id,
-                                         char *response, int response_len, int timeout_ms)
-{
-    char *json = cJSON_PrintUnformatted(request);
-    ESP_RETURN_ON_FALSE(json != NULL, ESP_ERR_NO_MEM, TAG, "usb json");
-    size_t line_len = strlen(USB_BRIDGE_PREFIX) + strlen(json) + 2;
-    char *line = heap_caps_malloc(line_len, MALLOC_CAP_8BIT);
-    if (!line) {
-        cJSON_free(json);
-        return ESP_ERR_NO_MEM;
-    }
-    snprintf(line, line_len, "%s%s\n", USB_BRIDGE_PREFIX, json);
-    cJSON_free(json);
-
-    usb_bridge_drain_input();
-    int written = usb_serial_jtag_write_bytes(line, strlen(line), pdMS_TO_TICKS(50));
-    heap_caps_free(line);
-    if (written <= 0) {
-        return ESP_ERR_TIMEOUT;
-    }
-    (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(50));
-    return usb_bridge_read_response(request_id, response, response_len, timeout_ms);
-}
-
-static esp_err_t usb_bridge_request_timeout(const char *method, const char *path, const char *body,
-                                            char *response, int response_len, int timeout_ms)
-{
-    if (!usb_bridge_should_try()) {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
-    char request_id[16];
-    usb_bridge_request_id(request_id, sizeof(request_id));
-    cJSON *request = cJSON_CreateObject();
-    ESP_RETURN_ON_FALSE(request != NULL, ESP_ERR_NO_MEM, TAG, "usb request");
-    cJSON_AddStringToObject(request, "id", request_id);
-    cJSON_AddStringToObject(request, "method", method);
-    cJSON_AddStringToObject(request, "path", path);
-    if (body) {
-        cJSON *body_json = cJSON_Parse(body);
-        if (body_json) {
-            cJSON_AddItemToObject(request, "body", body_json);
-        }
-    }
-    esp_err_t err = usb_bridge_send_request(request, request_id, response, response_len, timeout_ms);
-    cJSON_Delete(request);
-    s_usb_bridge_active = err == ESP_OK;
-    return err;
-}
-
 static esp_err_t bridge_request_timeout(const char *method, const char *path, const char *body,
                                         char *response, int response_len, int timeout_ms)
 {
-    esp_err_t usb_err = usb_bridge_request_timeout(method, path, body, response, response_len,
-                                                   USB_BRIDGE_TIMEOUT_MS);
-    if (usb_err == ESP_OK) {
-        return ESP_OK;
-    }
-    s_usb_bridge_active = false;
     return http_request_timeout(method, path, body, response, response_len, timeout_ms);
 }
 
@@ -1246,73 +1095,9 @@ static esp_err_t bridge_request(const char *method, const char *path, const char
     return bridge_request_timeout(method, path, body, response, response_len, 2500);
 }
 
-static esp_err_t usb_bridge_post_binary(const char *path, const uint8_t *body, size_t body_len,
-                                        char *response, int response_len)
-{
-    if (!usb_bridge_should_try()) {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-    size_t offset = 0;
-    bool sent_any = false;
-    while (offset < body_len || !sent_any) {
-        size_t chunk_len = body_len - offset;
-        if (chunk_len > USB_BRIDGE_AUDIO_CHUNK_BYTES) {
-            chunk_len = USB_BRIDGE_AUDIO_CHUNK_BYTES;
-        }
-        bool final = (offset + chunk_len) >= body_len;
-        size_t encoded_len = 0;
-        (void)mbedtls_base64_encode(NULL, 0, &encoded_len, body + offset, chunk_len);
-        unsigned char *encoded = heap_caps_malloc(encoded_len + 1, MALLOC_CAP_8BIT);
-        ESP_RETURN_ON_FALSE(encoded != NULL, ESP_ERR_NO_MEM, TAG, "usb base64");
-        esp_err_t err = ESP_OK;
-        size_t written_len = 0;
-        if (mbedtls_base64_encode(encoded, encoded_len + 1, &written_len, body + offset, chunk_len) != 0) {
-            heap_caps_free(encoded);
-            return ESP_FAIL;
-        }
-        encoded[written_len] = '\0';
-
-        char request_id[16];
-        usb_bridge_request_id(request_id, sizeof(request_id));
-        cJSON *request = cJSON_CreateObject();
-        if (!request) {
-            heap_caps_free(encoded);
-            return ESP_ERR_NO_MEM;
-        }
-        cJSON_AddStringToObject(request, "id", request_id);
-        cJSON_AddStringToObject(request, "method", "POST");
-        cJSON_AddStringToObject(request, "path", path);
-        cJSON_AddStringToObject(request, "encoding", "base64");
-        cJSON_AddStringToObject(request, "body", (const char *)encoded);
-        cJSON_AddBoolToObject(request, "final", final);
-        cJSON_AddNumberToObject(request, "sample_rate", 16000);
-        cJSON_AddNumberToObject(request, "channels", 1);
-        cJSON_AddNumberToObject(request, "bits_per_sample", 16);
-        err = usb_bridge_send_request(request, request_id,
-                                      final ? response : NULL,
-                                      final ? response_len : 0,
-                                      final ? 30000 : 1200);
-        cJSON_Delete(request);
-        heap_caps_free(encoded);
-        if (err != ESP_OK) {
-            s_usb_bridge_active = false;
-            return err;
-        }
-        s_usb_bridge_active = true;
-        sent_any = true;
-        offset += chunk_len;
-    }
-    return ESP_OK;
-}
-
 static esp_err_t bridge_post_binary(const char *path, const uint8_t *body, size_t body_len,
                                     char *response, int response_len)
 {
-    esp_err_t usb_err = usb_bridge_post_binary(path, body, body_len, response, response_len);
-    if (usb_err == ESP_OK) {
-        return ESP_OK;
-    }
-    s_usb_bridge_active = false;
     return http_post_binary(path, body, body_len, response, response_len);
 }
 
@@ -1322,6 +1107,42 @@ static void copy_json_string(cJSON *root, const char *key, char *target, size_t 
     if (cJSON_IsString(item) && item->valuestring) {
         strlcpy(target, item->valuestring, target_len);
     }
+}
+
+static void sanitize_ascii_text(char *text, size_t text_len, const char *fallback)
+{
+    if (!text || text_len == 0) {
+        return;
+    }
+
+    char cleaned[64];
+    size_t write_index = 0;
+    bool in_replacement = false;
+    const size_t cleaned_len = sizeof(cleaned);
+    for (size_t read_index = 0; text[read_index] != '\0' && write_index < cleaned_len - 1; ++read_index) {
+        unsigned char ch = (unsigned char)text[read_index];
+        if (ch >= 32 && ch < 127) {
+            cleaned[write_index++] = (char)ch;
+            in_replacement = false;
+        } else if (!in_replacement) {
+            cleaned[write_index++] = '-';
+            in_replacement = true;
+        }
+    }
+    cleaned[write_index] = '\0';
+
+    while (write_index > 0 && (cleaned[write_index - 1] == ' ' || cleaned[write_index - 1] == '-')) {
+        cleaned[--write_index] = '\0';
+    }
+    char *start = cleaned;
+    while (*start == ' ' || *start == '-') {
+        start++;
+    }
+    if (*start == '\0') {
+        strlcpy(text, fallback, text_len);
+        return;
+    }
+    strlcpy(text, start, text_len);
 }
 
 static bool json_percent_value(cJSON *item, int *value)
@@ -1356,6 +1177,7 @@ static void parse_provider_fields(cJSON *source, provider_display_state_t *targe
 {
     copy_json_string(source, "status", target->status, sizeof(target->status));
     copy_json_string(source, "project", target->project, sizeof(target->project));
+    sanitize_ascii_text(target->project, sizeof(target->project), "Project");
     copy_json_string(source, "quota_updated_at", target->quota_updated_at, sizeof(target->quota_updated_at));
 
     cJSON *quota_5h = cJSON_GetObjectItemCaseSensitive(source, "quota_5h_remaining");
@@ -1426,6 +1248,7 @@ static bool parse_state_json(const char *json)
 
     copy_json_string(state_root, "time", s_state.time, sizeof(s_state.time));
     copy_json_string(state_root, "computer_name", s_state.computer_name, sizeof(s_state.computer_name));
+    sanitize_ascii_text(s_state.computer_name, sizeof(s_state.computer_name), "Computer");
     cJSON *wifi = cJSON_GetObjectItemCaseSensitive(state_root, "wifi");
     cJSON *ble = cJSON_GetObjectItemCaseSensitive(state_root, "ble");
     s_state.wifi = cJSON_IsBool(wifi) ? cJSON_IsTrue(wifi) : s_state.wifi;
@@ -1823,7 +1646,6 @@ static void app_task(void *arg)
             last_poll = now_ms;
             poll_state();
         }
-        maybe_sleep_display();
         if (xQueueReceive(s_event_queue, &event, pdMS_TO_TICKS(100)) != pdTRUE) {
             continue;
         }

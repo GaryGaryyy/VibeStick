@@ -58,7 +58,7 @@ Bridge state is stored under:
 
 ## Transport
 
-v0.1.1 uses HTTP over Wi-Fi.
+Runtime transport uses HTTP over Wi-Fi.
 
 BLE is not part of the current mainline transport. USB is used for flashing and serial logs, not for runtime state transport.
 

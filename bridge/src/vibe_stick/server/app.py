@@ -23,6 +23,7 @@ from vibe_stick.codex.quota import QuotaSnapshot, load_quota, save_quota
 from vibe_stick.config.dotenv import load_dotenv_files
 from vibe_stick.config.paths import CLAUDE_QUOTA_PATH, QUOTA_PATH, RECORDING_PATH, STATE_PATH, ensure_app_support
 from vibe_stick.desktop.hud import hide_hud
+from vibe_stick.paste.input_injector import make_paste_injector
 from vibe_stick.protocol.state import (
     AlertState,
     AlertType,
@@ -92,6 +93,13 @@ class BridgeStateStore:
                 self.refresh_quota_locked()
             elif event_name == "button_short":
                 self._state.alert = AlertState(event_id="", type=AlertType.NONE, message="")
+                enter_result = make_paste_injector().press_enter()
+                if not enter_result.success:
+                    self._state.alert = AlertState(
+                        event_id("error"),
+                        AlertType.ERROR,
+                        enter_result.message or "Enter injection failed",
+                    )
             self._save_state_locked()
             return self._state
 
@@ -518,12 +526,18 @@ def _configured_provider() -> str:
 def _computer_name() -> str:
     configured = os.environ.get("VIBE_STICK_COMPUTER_NAME", "").strip()
     if configured:
-        return configured
+        return _display_safe_name(configured)
     for candidate in (platform.node(), socket.gethostname()):
         candidate = candidate.strip()
         if candidate:
-            return candidate.split(".")[0]
+            return _display_safe_name(candidate.split(".")[0])
     return "Computer"
+
+
+def _display_safe_name(value: str, fallback: str = "Computer") -> str:
+    cleaned = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in value)
+    name = " ".join(cleaned.split())
+    return name[:40] or fallback
 
 
 def _select_active_provider(

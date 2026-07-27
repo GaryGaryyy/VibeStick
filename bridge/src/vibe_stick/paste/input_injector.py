@@ -25,6 +25,9 @@ class PasteInjector:
     def paste(self, text: str, press_enter: bool = False) -> PasteResult:
         raise NotImplementedError
 
+    def press_enter(self) -> PasteResult:
+        raise NotImplementedError
+
 
 class MacPasteInjector(PasteInjector):
     def paste(self, text: str, press_enter: bool = False) -> PasteResult:
@@ -60,6 +63,24 @@ class MacPasteInjector(PasteInjector):
             message = (result.stderr or result.stdout or "macOS paste failed").strip()
             return PasteResult(False, message)
         return PasteResult(True, "Pasted into the focused app")
+
+    def press_enter(self) -> PasteResult:
+        if platform.system() != "Darwin":
+            return PasteResult(False, "Enter injection is only available on macOS")
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", 'tell application "System Events" to key code 36'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return PasteResult(False, f"macOS enter failed: {exc}")
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "macOS enter failed").strip()
+            return PasteResult(False, message)
+        return PasteResult(True, "Pressed Enter in the focused app")
 
     def _read_clipboard(self) -> str | None:
         try:
@@ -161,6 +182,33 @@ class WindowsPasteInjector(PasteInjector):
             keybd_event(vk_enter, 0, 0, None)
             keybd_event(vk_enter, 0, key_up, None)
 
+    def press_enter(self) -> PasteResult:
+        if platform.system() != "Windows":
+            return PasteResult(False, "Enter injection is only available on Windows")
+        try:
+            self._send_enter()
+        except OSError as exc:
+            return PasteResult(False, f"Windows enter failed: {exc}")
+        time.sleep(0.1)
+        return PasteResult(True, "Pressed Enter in the focused app")
+
+    def _send_enter(self) -> None:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        keybd_event = user32.keybd_event
+        keybd_event.argtypes = [
+            ctypes.c_ubyte,
+            ctypes.c_ubyte,
+            ctypes.c_uint,
+            ctypes.c_void_p,
+        ]
+        vk_enter = 0x0D
+        key_up = 0x0002
+
+        keybd_event(vk_enter, 0, 0, None)
+        keybd_event(vk_enter, 0, key_up, None)
+
 
 class UnsupportedPasteInjector(PasteInjector):
     def __init__(self, system: str) -> None:
@@ -171,3 +219,6 @@ class UnsupportedPasteInjector(PasteInjector):
         if not text.strip():
             return PasteResult(False, "No text to paste")
         return PasteResult(False, f"Automatic paste is not available on {self.system}")
+
+    def press_enter(self) -> PasteResult:
+        return PasteResult(False, f"Enter injection is not available on {self.system}")

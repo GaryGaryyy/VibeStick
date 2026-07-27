@@ -1,9 +1,7 @@
 # Protocol
 
-VibeStick v0.1.2 uses HTTP over Wi-Fi between the StickS3 firmware and the local Mac bridge.
-VibeStick v0.1.5 also supports an optional USB serial bridge for switching to a directly connected
-computer such as a Windows PC. When USB is powered and a USB bridge responds, the firmware prefers
-USB serial for state, event, and recording requests; otherwise it falls back to Wi-Fi HTTP.
+VibeStick uses HTTP over Wi-Fi between the StickS3 firmware and the local bridge. USB is not a
+runtime transport for state, events, recording, or paste injection.
 
 Default bridge URL:
 
@@ -156,44 +154,6 @@ The bridge writes a local WAV file under:
 ```
 
 The bridge rejects audio uploads larger than `VIBE_STICK_MAX_RECORDING_AUDIO_BYTES`. The default is `2000000` bytes.
-
-## USB Serial Bridge
-
-The USB bridge uses UTF-8 JSON lines over the ESP32-S3 USB Serial/JTAG port. Lines are prefixed with:
-
-```text
-VSJ1
-```
-
-The prefix lets the Windows bridge ignore normal firmware logs on the same serial port.
-
-Request example:
-
-```json
-{"id":"a1b2c3d4","method":"GET","path":"/state"}
-```
-
-Response example:
-
-```json
-{"id":"a1b2c3d4","ok":true,"status":200,"body":{"time":"13:01"}}
-```
-
-Audio uploads are split into base64 chunks:
-
-```json
-{
-  "id": "chunk-id",
-  "method": "POST",
-  "path": "/recording/audio?session_id=<id>",
-  "encoding": "base64",
-  "body": "<base64-pcm-chunk>",
-  "final": false,
-  "sample_rate": 16000,
-  "channels": 1,
-  "bits_per_sample": 16
-}
-```
 
 ## POST /recording/stop
 

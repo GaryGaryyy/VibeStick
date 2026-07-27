@@ -20,6 +20,10 @@ class ServerProviderTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"VIBE_STICK_COMPUTER_NAME": "Desk PC"}):
             self.assertEqual(app._computer_name(), "Desk PC")
 
+    def test_computer_name_sanitizes_display_value(self) -> None:
+        with mock.patch.dict(os.environ, {"VIBE_STICK_COMPUTER_NAME": "小雕 PC"}):
+            self.assertEqual(app._computer_name(), "PC")
+
     def test_select_active_provider_respects_pinned_config(self) -> None:
         self.assertEqual(app._select_active_provider("claude", "codex", self._obs("codex"), self._obs("claude")), "claude")
 

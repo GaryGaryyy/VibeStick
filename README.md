@@ -117,7 +117,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 & "$env:APPDATA\VibeStick\run-vibestick-wifi-bridge.cmd"
 ```
 
-Stable firmware still talks to the bridge host compiled into firmware. Runtime state, alerts, recording transcription, and paste injection use Wi-Fi.
+The firmware starts with the bridge host compiled into it, then can discover and save another bridge on the same LAN. Runtime state, alerts, recording transcription, and paste injection use Wi-Fi.
 
 ### Multiple Computers
 

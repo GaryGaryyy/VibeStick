@@ -115,7 +115,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 & "$env:APPDATA\VibeStick\run-vibestick-wifi-bridge.cmd"
 ```
 
-稳定固件仍然连接烧录时写入的 bridge host。运行时状态、提醒、录音转写和粘贴都走 Wi-Fi。
+固件首次使用烧录时写入的 bridge host，之后可以搜索并保存同一局域网里的其他 bridge。运行时状态、提醒、录音转写和粘贴都走 Wi-Fi。
 
 ### 多电脑切换
 

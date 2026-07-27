@@ -49,6 +49,7 @@
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
 #define LCD_SLEEP_TIMEOUT_MS 5000
+#define HTTP_CLIENT_BUFFER_SIZE 2048
 #define BRIDGE_HOST_LEN 64
 #define BRIDGE_NAME_LEN 48
 #define BRIDGE_DISCOVERY_PORT 8766
@@ -1287,6 +1288,8 @@ static esp_err_t http_request_timeout(const char *method, const char *path, cons
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = timeout_ms,
+        .buffer_size = HTTP_CLIENT_BUFFER_SIZE,
+        .buffer_size_tx = HTTP_CLIENT_BUFFER_SIZE,
         .event_handler = http_event_handler,
         .user_data = &capture,
     };
@@ -1329,6 +1332,8 @@ static esp_err_t http_post_binary(const char *path, const uint8_t *body, size_t 
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = 20000,
+        .buffer_size = HTTP_CLIENT_BUFFER_SIZE,
+        .buffer_size_tx = HTTP_CLIENT_BUFFER_SIZE,
         .event_handler = http_event_handler,
         .user_data = &capture,
     };

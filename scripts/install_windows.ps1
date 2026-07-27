@@ -28,4 +28,5 @@ Write-Host "VibeStick Windows config directory:"
 Write-Host $ConfigDir
 Write-Host "Wi-Fi bridge runner:"
 Write-Host $BridgeRunnerPath
-Write-Host "Run the Wi-Fi bridge runner on Windows. Stable firmware still talks to the bridge host compiled into firmware."
+Write-Host "Run the Wi-Fi bridge runner on Windows. On the StickS3, long-press the side button to discover this PC, then select it with the blue button."
+Write-Host "If Windows Firewall prompts, allow Python on private networks so TCP 8765 and UDP 8766 can receive LAN traffic."

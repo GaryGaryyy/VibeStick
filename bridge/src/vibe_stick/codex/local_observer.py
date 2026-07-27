@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import platform
 import re
 import subprocess
@@ -26,7 +25,6 @@ QUOTA_STALE_AFTER = timedelta(minutes=30)
 @dataclass
 class LocalCodexObservation:
     status: AgentStatus
-    project: str
     quota: QuotaSnapshot | None
     quota_found: bool
     alert_type: str = ""
@@ -39,11 +37,9 @@ class LocalCodexObservation:
 
 
 def observe_codex(project_root: Path) -> LocalCodexObservation:
+    del project_root
     now = datetime.now(timezone.utc)
     codex_online = _codex_process_running()
-    project = _project_name_from_env_or_root(project_root)
-    latest_cwd: Path | None = None
-    latest_cwd_timestamp: datetime | None = None
     latest_event: tuple[datetime, str, str] | None = None
     latest_alert: tuple[datetime, AgentStatus, str, str] | None = None
     latest_quota: tuple[datetime, QuotaSnapshot] | None = None
@@ -62,13 +58,6 @@ def observe_codex(project_root: Path) -> LocalCodexObservation:
             payload_type = str(payload.get("type") or top_type)
             candidate_type = payload_type or top_type
 
-            if top_type == "turn_context":
-                cwd = payload.get("cwd")
-                if isinstance(cwd, str) and cwd:
-                    if latest_cwd is None or _is_newer(timestamp, latest_cwd_timestamp):
-                        latest_cwd = Path(cwd)
-                        latest_cwd_timestamp = timestamp
-
             if candidate_type:
                 if latest_event is None or timestamp > latest_event[0]:
                     latest_event = (timestamp, candidate_type, str(payload.get("message") or ""))
@@ -83,9 +72,6 @@ def observe_codex(project_root: Path) -> LocalCodexObservation:
                 if latest_alert is None or timestamp > latest_alert[0]:
                     latest_alert = (timestamp, alert_status, alert_kind, message)
 
-    if latest_cwd is not None:
-        project = _project_name_from_path(latest_cwd)
-
     quota_snapshot = latest_quota[1] if latest_quota else None
     if not codex_online:
         status = AgentStatus.OFFLINE
@@ -98,7 +84,6 @@ def observe_codex(project_root: Path) -> LocalCodexObservation:
 
     observation = LocalCodexObservation(
         status=status,
-        project=project,
         quota=quota_snapshot,
         quota_found=quota_snapshot is not None,
         latest_session_path=latest_session_path,
@@ -195,10 +180,6 @@ def _parse_timestamp(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _is_newer(value: datetime, other: datetime | None) -> bool:
-    return other is None or value > other
-
-
 def _codex_process_running() -> bool:
     if platform.system() == "Windows":
         return _windows_codex_process_running()
@@ -258,17 +239,3 @@ def _command_is_codex_process(command: str) -> bool:
 
 def _has_app_server_arg(command: str) -> bool:
     return bool(re.search(r"(^|\s)app-server(\s|$)", command))
-
-
-def _project_name_from_env_or_root(project_root: Path) -> str:
-    configured = os.environ.get("VIBE_STICK_PROJECT_NAME", "").strip()
-    if configured:
-        return configured
-    return _project_name_from_path(project_root)
-
-
-def _project_name_from_path(path: Path) -> str:
-    root = path.expanduser().resolve()
-    if root.name in {"bridge", "firmware", "app", "scripts"} and (root.parent / "README.md").exists():
-        root = root.parent
-    return root.name or "vibestick"

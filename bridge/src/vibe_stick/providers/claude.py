@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,9 +18,9 @@ ALERT_ACTIVITY_WINDOW = timedelta(minutes=5)
 
 
 def observe_claude(project_root: Path) -> ProviderObservation:
+    del project_root
     now = datetime.now(timezone.utc)
     online = _claude_process_running()
-    project = _project_name_from_env_or_root(project_root)
     latest_event: tuple[datetime, str, str] | None = None  # (ts, type, session_id)
     latest_error: tuple[datetime, str, str] | None = None
     latest_done: tuple[datetime, str, str] | None = None
@@ -109,7 +108,6 @@ def observe_claude(project_root: Path) -> ProviderObservation:
         display_name="Claude",
         online=online,
         status=status,
-        project=project,
         quota_5h_remaining=None,
         quota_7d_remaining=None,
         quota_updated_at="",
@@ -241,17 +239,3 @@ def _parse_timestamp(value: object) -> datetime | None:
 
 def _truthy(value: object) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
-
-
-def _project_name_from_env_or_root(project_root: Path) -> str:
-    configured = os.environ.get("VIBE_STICK_PROJECT_NAME", "").strip()
-    if configured:
-        return configured
-    return _project_name_from_path(project_root)
-
-
-def _project_name_from_path(path: Path) -> str:
-    root = path.expanduser().resolve()
-    if root.name in {"bridge", "firmware", "app", "scripts"} and (root.parent / "README.md").exists():
-        root = root.parent
-    return root.name or "vibestick"

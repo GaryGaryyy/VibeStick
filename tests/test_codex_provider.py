@@ -36,7 +36,6 @@ class CodexProviderTests(unittest.TestCase):
         observation = observation_from_local_codex(
             LocalCodexObservation(
                 status=AgentStatus.DONE,
-                project="VibeStick",
                 quota=QuotaSnapshot(66, 96, "09:40", False),
                 quota_found=True,
                 alert_type="DONE",
@@ -60,7 +59,6 @@ class CodexProviderTests(unittest.TestCase):
         observation = observation_from_local_codex(
             LocalCodexObservation(
                 status=AgentStatus.IDLE,
-                project="VibeStick",
                 quota=None,
                 quota_found=False,
                 codex_online=True,

@@ -602,7 +602,6 @@ def _claude_usage_interval_seconds() -> int:
 def _codex_state_from_observation(observation: ProviderObservation) -> CodexState:
     return CodexState(
         status=observation.status,
-        project=observation.project,
         quota_5h_remaining=observation.quota_5h_remaining,
         quota_7d_remaining=observation.quota_7d_remaining,
         quota_updated_at=observation.quota_updated_at,
@@ -616,7 +615,6 @@ def _provider_state_from_observation(observation: ProviderObservation) -> Provid
         display_name=observation.display_name,
         implemented=True,
         status=observation.status,
-        project=observation.project,
         quota_5h_remaining=observation.quota_5h_remaining,
         quota_7d_remaining=observation.quota_7d_remaining,
         quota_updated_at=observation.quota_updated_at,

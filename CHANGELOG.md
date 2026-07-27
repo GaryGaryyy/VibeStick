@@ -2,11 +2,12 @@
 
 ## v0.1.5
 
-- Stable StickS3 home screen update: dimmer backlight, original CPU/power defaults, and a computer-name panel instead of 5H / 7D quota bars.
+- Stable StickS3 home screen update: dimmer backlight, 5-second idle backlight sleep, 160 MHz CPU default, and a computer-name panel instead of 5H / 7D quota bars.
 - Status dot colors now use green for running/done, yellow for approval, and red for errors.
 - Recording upload, ASR, transcript rejection, and paste failures now play the error alert sound.
 - Added a Windows Wi-Fi bridge runner script. Runtime state, alerts, recording, and paste handling stay on Wi-Fi.
 - Bridge state now includes `computer_name`, with `VIBE_STICK_COMPUTER_NAME` as an override.
+- Project names are no longer exposed in bridge state or rendered on the StickS3 home screen.
 
 ## v0.1.4
 

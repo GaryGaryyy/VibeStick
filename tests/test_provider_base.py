@@ -11,7 +11,6 @@ class ProviderBaseTests(unittest.TestCase):
             display_name="Codex",
             online=True,
             status=AgentStatus.RUNNING,
-            project="VibeStick",
             quota_5h_remaining=91,
             quota_7d_remaining=99,
             quota_updated_at="09:38",

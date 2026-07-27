@@ -40,10 +40,11 @@
 #define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
 #define LCD_BACKLIGHT_PWM_HZ 5000
 #define LCD_BACKLIGHT_PWM_MAX 255
-#define LCD_BACKLIGHT_DEFAULT 100
+#define LCD_BACKLIGHT_DEFAULT 60
 #define LVGL_DRAW_BUF_LINES 24
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
+#define LCD_SLEEP_TIMEOUT_MS 5000
 
 #define PIN_BUTTON_FRONT 11
 #define PIN_BUTTON_SIDE 12
@@ -94,7 +95,6 @@ typedef struct {
     bool usb_powered;
     char computer_name[64];
     char codex_status[24];
-    char project[40];
     int quota_5h;
     int quota_7d;
     bool quota_5h_valid;
@@ -108,7 +108,6 @@ typedef struct {
 
 typedef struct {
     char status[24];
-    char project[40];
     int quota_5h;
     int quota_7d;
     bool quota_5h_valid;
@@ -156,7 +155,6 @@ static lv_obj_t *s_quota_7d_label;
 static lv_obj_t *s_quota_status_label;
 static lv_obj_t *s_computer_title_label;
 static lv_obj_t *s_computer_name_label;
-static lv_obj_t *s_project_label;
 static lv_obj_t *s_recording_overlay;
 static lv_obj_t *s_recording_wave_group;
 static lv_obj_t *s_recording_wave_bars[5];
@@ -172,7 +170,6 @@ static agent_state_t s_state = {
     .usb_powered = false,
     .computer_name = "Computer",
     .codex_status = "OFFLINE",
-    .project = "vibestick",
     .quota_5h = 0,
     .quota_7d = 0,
     .quota_5h_valid = false,
@@ -187,7 +184,6 @@ static agent_state_t s_state = {
 static provider_display_state_t s_provider_states[PROVIDER_COUNT] = {
     [PROVIDER_CODEX] = {
         .status = "OFFLINE",
-        .project = "vibestick",
         .quota_5h = 0,
         .quota_7d = 0,
         .quota_5h_valid = false,
@@ -197,7 +193,6 @@ static provider_display_state_t s_provider_states[PROVIDER_COUNT] = {
     },
     [PROVIDER_CLAUDE] = {
         .status = "OFFLINE",
-        .project = "vibestick",
         .quota_5h = 0,
         .quota_7d = 0,
         .quota_5h_valid = false,
@@ -413,17 +408,24 @@ static void set_display_awake(bool awake)
         return;
     }
     s_display_awake = awake;
-    if (s_panel) {
-        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_disp_on_off(s_panel, awake));
-    }
     set_backlight(awake ? LCD_BACKLIGHT_DEFAULT : 0);
-    ESP_LOGI(TAG, "display %s", awake ? "awake" : "sleep");
+    ESP_LOGI(TAG, "backlight %s", awake ? "awake" : "sleep");
 }
 
 static void note_user_activity(void)
 {
     s_last_user_activity_ms = now_ms();
     set_display_awake(true);
+}
+
+static void maybe_sleep_display(void)
+{
+    if (!s_display_awake || s_recording_overlay_visible || vibe_audio_is_recording()) {
+        return;
+    }
+    if (now_ms() - s_last_user_activity_ms >= LCD_SLEEP_TIMEOUT_MS) {
+        set_display_awake(false);
+    }
 }
 
 static void init_backlight(void)
@@ -754,10 +756,7 @@ static void create_ui(void)
     lv_obj_align(s_computer_title_label, LV_ALIGN_TOP_MID, 0, 130);
     s_computer_name_label = make_wrap_label(screen, "Computer", &lv_font_montserrat_14,
                                             lv_color_hex(0xf3f4f6), 108, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 150);
-    s_project_label = make_wrap_label(screen, "s3", &lv_font_montserrat_12,
-                                      lv_color_hex(0x8a9099), 108, LV_TEXT_ALIGN_CENTER);
-    lv_obj_align(s_project_label, LV_ALIGN_TOP_MID, 0, 197);
+    lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 158);
 
     s_recording_overlay = lv_obj_create(screen);
     lv_obj_set_size(s_recording_overlay, LCD_H_RES, LCD_V_RES);
@@ -860,7 +859,6 @@ static void render_state(void)
     lv_label_set_text(s_status_label, implemented ? status_text_for(display_state->status) : "待命");
     set_status_color(provider, status_key);
     lv_label_set_text(s_computer_name_label, s_state.computer_name);
-    lv_label_set_text(s_project_label, display_state->project);
     set_quota_title(s_quota_5h_title_label, "5H", quota_stale);
     set_quota_title(s_quota_7d_title_label, "7D", quota_stale);
     set_quota_label(s_quota_5h_bar, s_quota_5h_label, display_state->quota_5h,
@@ -975,8 +973,7 @@ static void maybe_handle_alert(void)
         ESP_LOGW(TAG, "alert sound skipped type=%s err=%s",
                  s_state.alert_type, esp_err_to_name(err));
     }
-    ESP_LOGI(TAG, "alert type=%s project=%s message=%s",
-             s_state.alert_type, s_state.project, s_state.alert_message);
+    ESP_LOGI(TAG, "alert type=%s message=%s", s_state.alert_type, s_state.alert_message);
 }
 
 static esp_err_t http_event_handler(esp_http_client_event_t *evt)
@@ -1176,8 +1173,6 @@ static bool json_percent_value(cJSON *item, int *value)
 static void parse_provider_fields(cJSON *source, provider_display_state_t *target)
 {
     copy_json_string(source, "status", target->status, sizeof(target->status));
-    copy_json_string(source, "project", target->project, sizeof(target->project));
-    sanitize_ascii_text(target->project, sizeof(target->project), "Project");
     copy_json_string(source, "quota_updated_at", target->quota_updated_at, sizeof(target->quota_updated_at));
 
     cJSON *quota_5h = cJSON_GetObjectItemCaseSensitive(source, "quota_5h_remaining");
@@ -1646,6 +1641,7 @@ static void app_task(void *arg)
             last_poll = now_ms;
             poll_state();
         }
+        maybe_sleep_display();
         if (xQueueReceive(s_event_queue, &event, pdMS_TO_TICKS(100)) != pdTRUE) {
             continue;
         }

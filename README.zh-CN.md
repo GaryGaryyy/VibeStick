@@ -172,7 +172,6 @@ open -e .env
 ### 核心设置
 
 - `VIBE_STICK_PROJECT_ROOT`：本地 Codex session 观察路径。
-- `VIBE_STICK_PROJECT_NAME`：可选显示名称。
 - `VIBE_STICK_COMPUTER_NAME`：可选电脑名称覆盖值，会显示在 StickS3 首页。
 - `VIBE_STICK_PROVIDER`：当前 provider，`auto`、`codex` 或 `claude`；默认 `auto`。
 - `VIBE_STICK_BRIDGE_TOKEN`：bridge 绑定到非 loopback 地址时必需的共享 token，例如 `0.0.0.0`。
@@ -269,7 +268,7 @@ idf.py build
 - 这是整理后的原型，不是打包好的 Mac app 或 DMG。
 - 固件只面向 M5Stack StickS3。
 - 当前稳定首页优先显示 provider 状态和电脑名称；5H/7D 额度仍保留在 bridge 状态里，但暂不显示在屏幕上。
-- 屏幕亮度比之前更低，但稳定固件保留原始 CPU 和电源管理默认值。
+- 屏幕亮度比之前更低，空闲 5 秒后关闭背光，固件默认 CPU 频率降为 160 MHz。
 - Windows 支持目前是脚本形式，需要 Python 3.11+；不是签名安装包。
 - Codex quota 来自本地 Codex session JSONL 里的 `rate_limits`，不是官方 quota API。
 - Claude usage 来自未公开的 Claude Code OAuth endpoint，默认关闭。

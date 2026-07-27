@@ -174,7 +174,6 @@ Empty values in `.env` generally mean "use the built-in default". `scripts/dev.s
 ### Core settings
 
 - `VIBE_STICK_PROJECT_ROOT`: project root used for local Codex session observation.
-- `VIBE_STICK_PROJECT_NAME`: optional display-name override.
 - `VIBE_STICK_COMPUTER_NAME`: optional computer-name override shown on the StickS3 home screen.
 - `VIBE_STICK_PROVIDER`: active provider selection, `auto`, `codex`, or `claude`; default `auto`.
 - `VIBE_STICK_BRIDGE_TOKEN`: shared token required whenever the bridge binds outside loopback, such as `0.0.0.0`.
@@ -271,7 +270,7 @@ idf.py build
 - This is a cleaned prototype, not a packaged Mac app or DMG.
 - The firmware targets M5Stack StickS3 only.
 - The home screen prioritizes provider status and computer name; 5H/7D quota values are still available in bridge state but are not shown on the current stable UI.
-- The screen is dimmer than before, but the stable firmware keeps the original CPU and power-management defaults.
+- The screen is dimmer than before, the backlight turns off after 5 seconds of idle time, and the firmware defaults to a 160 MHz CPU clock.
 - Windows support is script-based and needs Python 3.11+. The generated runner is not a signed Windows app.
 - Codex quota is inferred from local Codex session JSONL events with `rate_limits`; it is not an official quota API.
 - Claude usage comes from an undocumented Claude Code OAuth endpoint and is disabled by default.

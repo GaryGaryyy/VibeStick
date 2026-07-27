@@ -53,7 +53,6 @@ Returns the current bridge state:
     "display_name": "Claude",
     "implemented": true,
     "status": "RUNNING",
-    "project": "vibestick",
     "quota_5h_remaining": 66,
     "quota_7d_remaining": 96,
     "quota_updated_at": "13:01",
@@ -61,7 +60,6 @@ Returns the current bridge state:
   },
   "codex": {
     "status": "RUNNING",
-    "project": "vibestick",
     "quota_5h_remaining": 53,
     "quota_7d_remaining": 93,
     "quota_updated_at": "13:01",

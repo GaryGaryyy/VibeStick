@@ -5,6 +5,8 @@ import hmac
 import ipaddress
 import json
 import os
+import platform
+import socket
 import threading
 import time
 from http import HTTPStatus
@@ -18,6 +20,7 @@ from vibe_stick.audio.recorder import RecordingController
 from vibe_stick.claude.usage import fetch_usage as fetch_claude_usage
 from vibe_stick.claude.usage import to_quota_snapshot as claude_usage_to_quota
 from vibe_stick.codex.quota import QuotaSnapshot, load_quota, save_quota
+from vibe_stick.config.dotenv import load_dotenv_files
 from vibe_stick.config.paths import CLAUDE_QUOTA_PATH, QUOTA_PATH, RECORDING_PATH, STATE_PATH, ensure_app_support
 from vibe_stick.desktop.hud import hide_hud
 from vibe_stick.protocol.state import (
@@ -74,6 +77,7 @@ class BridgeStateStore:
         with self._lock:
             self._refresh_providers_locked()
             self._state.time = now_time_text()
+            self._state.computer_name = _computer_name()
             self._save_state_locked()
             return self._state
 
@@ -511,6 +515,17 @@ def _configured_provider() -> str:
     return value if value in {"codex", "claude", "auto"} else "auto"
 
 
+def _computer_name() -> str:
+    configured = os.environ.get("VIBE_STICK_COMPUTER_NAME", "").strip()
+    if configured:
+        return configured
+    for candidate in (platform.node(), socket.gethostname()):
+        candidate = candidate.strip()
+        if candidate:
+            return candidate.split(".")[0]
+    return "Computer"
+
+
 def _select_active_provider(
     configured: str,
     last_active: str,
@@ -618,5 +633,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    load_dotenv_files()
     args = build_parser().parse_args(argv)
     run_server(args.host, args.port)

@@ -12,7 +12,7 @@ VibeStick 面向 M5Stack StickS3，不是 M5Stack 官方项目。Codex、Claude 
 
 ## 开始前的准备
 
-- [ ] M5 StickS3｜一根 USB-C 数据线｜一台电脑（最好是Mac）
+- [ ] M5 StickS3｜一根 USB-C 数据线｜一台电脑（Mac 或 Windows；Windows 通过 USB bridge 切换）
 - [ ] Wi-Fi（必须是 2.4GHz） 名称｜Wi-Fi密码｜语音识别模型 API Key
 -  语音转写API key 推荐 SiliconFlow：<https://cloud.siliconflow.cn/i/7ZCoy9fU>。国内直连、有免费额度、OpenAI 兼容；演示视频用的就是 SiliconFlow。可改用其他 OpenAI 兼容服务的 `base_url` 和模型名称。
 -  如要显示 Claude 5H/7D 用量（该功能默认关闭）。需要 Claude Code CLI（在终端运行 `claude` 后执行 `/login`），并在 `.env` 中设置 `VIBE_STICK_CLAUDE_USAGE=on`。
@@ -105,6 +105,18 @@ ls /dev/cu.*
 
 11. 👤 打开任意文本框，长按正面蓝键说话，松开后 VibeStick 应自动转写并粘贴。
 
+### 可选：Windows USB bridge
+
+如果要切换到 Windows 电脑，在 Windows 上安装 bridge，然后用 USB-C 数据线把 StickS3 插到这台 Windows 电脑：
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install_windows.ps1
+& "$env:APPDATA\VibeStick\run-vibestick-usb-bridge.cmd"
+```
+
+如果自动扫描串口选错设备，可以给安装脚本传 `-Port COM5`。USB bridge 有响应时，StickS3 会优先使用这台 Windows 电脑处理状态、提醒、录音转写和粘贴；拔掉数据线或 Windows bridge 没运行时，会自动回退到固件里配置的 Wi-Fi bridge。
+
 开发调试时可以用 `./scripts/dev.sh` 替代 `./scripts/install.sh`，它会在当前终端里运行 bridge。
 
 ## 常见问题排查
@@ -161,6 +173,7 @@ open -e .env
 
 - `VIBE_STICK_PROJECT_ROOT`：本地 Codex session 观察路径。
 - `VIBE_STICK_PROJECT_NAME`：可选显示名称。
+- `VIBE_STICK_COMPUTER_NAME`：可选电脑名称覆盖值，会显示在 StickS3 首页。
 - `VIBE_STICK_PROVIDER`：当前 provider，`auto`、`codex` 或 `claude`；默认 `auto`。
 - `VIBE_STICK_BRIDGE_TOKEN`：bridge 绑定到非 loopback 地址时必需的共享 token，例如 `0.0.0.0`。
 - `VIBE_STICK_MAX_RECORDING_AUDIO_BYTES`：`/recording/audio` 最大请求体大小，默认 `2000000`。
@@ -255,6 +268,9 @@ idf.py build
 
 - 这是整理后的原型，不是打包好的 Mac app 或 DMG。
 - 固件只面向 M5Stack StickS3。
+- 当前低功耗首页优先显示 provider 状态和电脑名称；5H/7D 额度仍保留在 bridge 状态里，但暂不显示在屏幕上。
+- 屏幕亮度比之前更低，5 秒无操作后自动熄屏；按键和任务提醒会唤醒屏幕。
+- Windows 支持目前是脚本形式，需要 Python 3.11+ 和 `pyserial`，不是签名安装包。
 - Codex quota 来自本地 Codex session JSONL 里的 `rate_limits`，不是官方 quota API。
 - Claude usage 来自未公开的 Claude Code OAuth endpoint，默认关闭。
 - ASR 可靠性取决于麦克风采集、上传 PCM 质量、provider 可达性和模型配置。

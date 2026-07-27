@@ -15,6 +15,12 @@ class ProtocolStateTests(unittest.TestCase):
         )
 
         self.assertIsNone(state.to_jsonable()["battery"])
+        self.assertEqual(state.to_jsonable()["computer_name"], "Computer")
+
+    def test_bridge_state_preserves_computer_name(self) -> None:
+        state = state_from_dict({"computer_name": "Long Windows Workstation"})
+
+        self.assertEqual(state.to_jsonable()["computer_name"], "Long Windows Workstation")
 
     def test_legacy_codex_block_populates_generic_provider(self) -> None:
         state = state_from_dict(

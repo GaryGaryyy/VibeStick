@@ -11,6 +11,7 @@
 #include "driver/gpio.h"
 #include "driver/ledc.h"
 #include "driver/spi_master.h"
+#include "driver/usb_serial_jtag.h"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
@@ -27,6 +28,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "mbedtls/base64.h"
 #include "vibe_stick_ui_assets.h"
 #include "iot_button.h"
 #include "lvgl.h"
@@ -40,10 +42,14 @@
 #define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
 #define LCD_BACKLIGHT_PWM_HZ 5000
 #define LCD_BACKLIGHT_PWM_MAX 255
-#define LCD_BACKLIGHT_DEFAULT 150
+#define LCD_BACKLIGHT_DEFAULT 60
 #define LVGL_DRAW_BUF_LINES 24
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
+#define LCD_SLEEP_TIMEOUT_MS 5000
+#define USB_BRIDGE_PREFIX "VSJ1 "
+#define USB_BRIDGE_TIMEOUT_MS 220
+#define USB_BRIDGE_AUDIO_CHUNK_BYTES 768
 
 #define PIN_BUTTON_FRONT 11
 #define PIN_BUTTON_SIDE 12
@@ -92,6 +98,7 @@ typedef struct {
     int battery;
     bool battery_charging;
     bool usb_powered;
+    char computer_name[64];
     char codex_status[24];
     char project[40];
     int quota_5h;
@@ -131,8 +138,12 @@ static char s_last_alert_event_id[56];
 static char s_last_alert_type[24];
 static bool s_alert_sound_baseline_ready;
 static char s_recording_session_id[40];
+static bool s_display_awake = true;
+static int64_t s_last_user_activity_ms;
+static bool s_usb_bridge_active;
 
 static lv_display_t *s_display;
+static esp_lcd_panel_handle_t s_panel;
 static lv_obj_t *s_wifi_label;
 static lv_obj_t *s_battery_label;
 static lv_obj_t *s_battery_icon;
@@ -150,6 +161,9 @@ static lv_obj_t *s_quota_7d_bar;
 static lv_obj_t *s_quota_5h_label;
 static lv_obj_t *s_quota_7d_label;
 static lv_obj_t *s_quota_status_label;
+static lv_obj_t *s_computer_title_label;
+static lv_obj_t *s_computer_name_label;
+static lv_obj_t *s_project_label;
 static lv_obj_t *s_recording_overlay;
 static lv_obj_t *s_recording_wave_group;
 static lv_obj_t *s_recording_wave_bars[5];
@@ -163,6 +177,7 @@ static agent_state_t s_state = {
     .battery = 0,
     .battery_charging = false,
     .usb_powered = false,
+    .computer_name = "Computer",
     .codex_status = "OFFLINE",
     .project = "vibestick",
     .quota_5h = 0,
@@ -394,6 +409,41 @@ static void set_backlight(uint8_t brightness)
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
+static int64_t now_ms(void)
+{
+    return esp_timer_get_time() / 1000;
+}
+
+static void set_display_awake(bool awake)
+{
+    if (s_display_awake == awake) {
+        return;
+    }
+    s_display_awake = awake;
+    if (s_panel) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_lcd_panel_disp_on_off(s_panel, awake));
+    }
+    set_backlight(awake ? LCD_BACKLIGHT_DEFAULT : 0);
+    ESP_LOGI(TAG, "display %s", awake ? "awake" : "sleep");
+}
+
+static void note_user_activity(void)
+{
+    s_last_user_activity_ms = now_ms();
+    set_display_awake(true);
+}
+
+static void maybe_sleep_display(void)
+{
+    if (!s_display_awake || s_recording_overlay_visible || vibe_audio_is_recording()) {
+        return;
+    }
+    int64_t idle_ms = now_ms() - s_last_user_activity_ms;
+    if (idle_ms >= LCD_SLEEP_TIMEOUT_MS) {
+        set_display_awake(false);
+    }
+}
+
 static void init_backlight(void)
 {
     ledc_timer_config_t timer = {
@@ -445,22 +495,21 @@ static esp_err_t init_display(void)
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config, &io_handle),
                         TAG, "panel io");
 
-    esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_panel_dev_config_t panel_config = {
         .reset_gpio_num = PIN_LCD_RST,
         .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
         .bits_per_pixel = 16,
     };
-    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7789(io_handle, &panel_config, &panel), TAG, "panel");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel), TAG, "panel reset");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel), TAG, "panel init");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(panel, true), TAG, "panel invert");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_set_gap(panel, LCD_X_GAP, LCD_Y_GAP), TAG, "panel gap");
-    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(panel, true), TAG, "panel on");
+    ESP_RETURN_ON_ERROR(esp_lcd_new_panel_st7789(io_handle, &panel_config, &s_panel), TAG, "panel");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(s_panel), TAG, "panel reset");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_init(s_panel), TAG, "panel init");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_invert_color(s_panel, true), TAG, "panel invert");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_set_gap(s_panel, LCD_X_GAP, LCD_Y_GAP), TAG, "panel gap");
+    ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_panel, true), TAG, "panel on");
 
     lv_init();
     s_display = lv_display_create(LCD_H_RES, LCD_V_RES);
-    lv_display_set_user_data(s_display, panel);
+    lv_display_set_user_data(s_display, s_panel);
     lv_display_set_flush_cb(s_display, lvgl_flush_cb);
 
     size_t buffer_size = LCD_H_RES * LVGL_DRAW_BUF_LINES * sizeof(lv_color_t);
@@ -495,6 +544,15 @@ static lv_obj_t *make_label(lv_obj_t *parent, const char *text, const lv_font_t 
     lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(label, width);
     lv_obj_set_style_text_align(label, align, 0);
+    return label;
+}
+
+static lv_obj_t *make_wrap_label(lv_obj_t *parent, const char *text, const lv_font_t *font,
+                                 lv_color_t color, int32_t width, lv_text_align_t align)
+{
+    lv_obj_t *label = make_label(parent, text, font, color, width, align);
+    lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_line_space(label, 1, 0);
     return label;
 }
 
@@ -681,26 +739,43 @@ static void create_ui(void)
 
     lv_obj_t *divider = make_plain_obj(quota_wrap, 1, 72, lv_color_hex(0x242832), LV_OPA_COVER, 1);
     lv_obj_align(divider, LV_ALIGN_CENTER, 0, 10);
+    lv_obj_add_flag(divider, LV_OBJ_FLAG_HIDDEN);
 
     s_quota_5h_title_label = make_label(screen, "5H --%", &lv_font_montserrat_12,
                                         lv_color_hex(0x8a9099), 44, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_5h_title_label, LV_ALIGN_TOP_LEFT, 17, 133);
+    lv_obj_add_flag(s_quota_5h_title_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_5h_label = make_label(screen, "--%", &lv_font_montserrat_20, lv_color_hex(0xf3f4f6), 54, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_5h_label, LV_ALIGN_TOP_LEFT, 10, 153);
+    lv_obj_add_flag(s_quota_5h_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_5h_bar = make_bar(screen, 46);
     lv_obj_align(s_quota_5h_bar, LV_ALIGN_TOP_LEFT, 16, 190);
+    lv_obj_add_flag(s_quota_5h_bar, LV_OBJ_FLAG_HIDDEN);
 
     s_quota_7d_title_label = make_label(screen, "7D --%", &lv_font_montserrat_12,
                                         lv_color_hex(0x8a9099), 44, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_7d_title_label, LV_ALIGN_TOP_RIGHT, -17, 133);
+    lv_obj_add_flag(s_quota_7d_title_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_7d_label = make_label(screen, "--%", &lv_font_montserrat_20, lv_color_hex(0xf3f4f6), 54, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_7d_label, LV_ALIGN_TOP_RIGHT, -10, 153);
+    lv_obj_add_flag(s_quota_7d_label, LV_OBJ_FLAG_HIDDEN);
     s_quota_7d_bar = make_bar(screen, 46);
     lv_obj_align(s_quota_7d_bar, LV_ALIGN_TOP_RIGHT, -16, 190);
+    lv_obj_add_flag(s_quota_7d_bar, LV_OBJ_FLAG_HIDDEN);
     s_quota_status_label = make_label(screen, "WAIT", &lv_font_montserrat_10,
                                       lv_color_hex(0x686e78), 84, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_quota_status_label, LV_ALIGN_TOP_MID, 0, 207);
     lv_obj_add_flag(s_quota_status_label, LV_OBJ_FLAG_HIDDEN);
+
+    s_computer_title_label = make_label(screen, "电脑", FONT_CN,
+                                        lv_color_hex(0x8a9099), 108, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align(s_computer_title_label, LV_ALIGN_TOP_MID, 0, 130);
+    s_computer_name_label = make_wrap_label(screen, "Computer", FONT_CN,
+                                            lv_color_hex(0xf3f4f6), 108, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align(s_computer_name_label, LV_ALIGN_TOP_MID, 0, 150);
+    s_project_label = make_wrap_label(screen, "s3", &lv_font_montserrat_12,
+                                      lv_color_hex(0x8a9099), 108, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align(s_project_label, LV_ALIGN_TOP_MID, 0, 197);
 
     s_recording_overlay = lv_obj_create(screen);
     lv_obj_set_size(s_recording_overlay, LCD_H_RES, LCD_V_RES);
@@ -763,12 +838,14 @@ static void set_status_color(const agent_provider_config_t *provider, const char
     if (!provider->implemented) {
         color = lv_color_hex(0x9aa0aa);
     } else if (strcmp(status, "RUNNING") == 0 || strcmp(status, "DONE") == 0) {
-        color = provider->accent_color;
+        color = lv_color_hex(0x32d583);
     } else if (strcmp(status, "APPROVAL") == 0) {
-        color = lv_color_hex(0xcfd3da);
+        color = lv_color_hex(0xfdb022);
+    } else if (strcmp(status, "ERROR") == 0) {
+        color = lv_color_hex(0xf97066);
     } else if (strcmp(status, "IDLE") == 0 || strcmp(status, "UNKNOWN") == 0) {
         color = lv_color_hex(0x9aa0aa);
-    } else if (strcmp(status, "ERROR") == 0 || strcmp(status, "OFFLINE") == 0) {
+    } else if (strcmp(status, "OFFLINE") == 0) {
         color = lv_color_hex(0x686e78);
     }
     lv_obj_set_style_bg_color(s_status_dot, color, 0);
@@ -785,9 +862,9 @@ static void render_state(void)
     const bool quota_stale = implemented && display_state->quota_stale;
     const char *status_key = implemented ? display_state->status : "UNIMPLEMENTED";
 
-    lv_label_set_text(s_wifi_label, s_wifi_connected ? "WiFi" : "OFF");
+    lv_label_set_text(s_wifi_label, s_usb_bridge_active ? "USB" : (s_wifi_connected ? "WiFi" : "OFF"));
     lv_obj_set_style_text_color(s_wifi_label,
-                                s_wifi_connected ? lv_color_hex(0xf3f4f6) : lv_color_hex(0x686e78),
+                                (s_usb_bridge_active || s_wifi_connected) ? lv_color_hex(0xf3f4f6) : lv_color_hex(0x686e78),
                                 0);
     set_battery_ui(s_state.battery, s_state.battery_charging, s_state.usb_powered);
     if (provider->icon) {
@@ -800,6 +877,8 @@ static void render_state(void)
     lv_obj_set_style_text_color(s_provider_label, provider->implemented ? lv_color_hex(0xf3f4f6) : lv_color_hex(0xd7d9de), 0);
     lv_label_set_text(s_status_label, implemented ? status_text_for(display_state->status) : "待命");
     set_status_color(provider, status_key);
+    lv_label_set_text(s_computer_name_label, s_state.computer_name);
+    lv_label_set_text(s_project_label, display_state->project);
     set_quota_title(s_quota_5h_title_label, "5H", quota_stale);
     set_quota_title(s_quota_7d_title_label, "7D", quota_stale);
     set_quota_label(s_quota_5h_bar, s_quota_5h_label, display_state->quota_5h,
@@ -908,6 +987,7 @@ static void maybe_handle_alert(void)
         return;
     }
 
+    note_user_activity();
     esp_err_t err = vibe_audio_play_sound(sound);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "alert sound skipped type=%s err=%s",
@@ -978,12 +1058,6 @@ static esp_err_t http_request_timeout(const char *method, const char *path, cons
     return err;
 }
 
-static esp_err_t http_request(const char *method, const char *path, const char *body,
-                              char *response, int response_len)
-{
-    return http_request_timeout(method, path, body, response, response_len, 2500);
-}
-
 static esp_err_t http_post_binary(const char *path, const uint8_t *body, size_t body_len,
                                   char *response, int response_len)
 {
@@ -1025,6 +1099,221 @@ static esp_err_t http_post_binary(const char *path, const uint8_t *body, size_t 
     }
     esp_http_client_cleanup(client);
     return err;
+}
+
+static bool usb_bridge_should_try(void)
+{
+    return VIBE_STICK_USB_BRIDGE_ENABLED && s_state.usb_powered;
+}
+
+static void usb_bridge_request_id(char *request_id, size_t request_id_len)
+{
+    snprintf(request_id, request_id_len, "%08lx", (unsigned long)esp_random());
+}
+
+static void usb_bridge_drain_input(void)
+{
+    uint8_t discard[64];
+    while (usb_serial_jtag_read_bytes(discard, sizeof(discard), 0) > 0) {
+    }
+}
+
+static esp_err_t usb_bridge_read_response(const char *request_id, char *response, int response_len, int timeout_ms)
+{
+    char line[3072];
+    int used = 0;
+    const int64_t deadline = esp_timer_get_time() + ((int64_t)timeout_ms * 1000);
+    while (esp_timer_get_time() < deadline) {
+        uint8_t ch = 0;
+        int read = usb_serial_jtag_read_bytes(&ch, 1, pdMS_TO_TICKS(10));
+        if (read <= 0) {
+            continue;
+        }
+        if (ch == '\r') {
+            continue;
+        }
+        if (ch != '\n') {
+            if (used < (int)sizeof(line) - 1) {
+                line[used++] = (char)ch;
+            } else {
+                used = 0;
+            }
+            continue;
+        }
+
+        line[used] = '\0';
+        used = 0;
+        if (strncmp(line, USB_BRIDGE_PREFIX, strlen(USB_BRIDGE_PREFIX)) != 0) {
+            continue;
+        }
+        const char *payload = line + strlen(USB_BRIDGE_PREFIX);
+        cJSON *root = cJSON_Parse(payload);
+        if (!root) {
+            continue;
+        }
+        cJSON *id = cJSON_GetObjectItemCaseSensitive(root, "id");
+        cJSON *ok = cJSON_GetObjectItemCaseSensitive(root, "ok");
+        if (!cJSON_IsString(id) || strcmp(id->valuestring, request_id) != 0) {
+            cJSON_Delete(root);
+            continue;
+        }
+        if (!cJSON_IsTrue(ok)) {
+            cJSON_Delete(root);
+            return ESP_FAIL;
+        }
+        cJSON *body = cJSON_GetObjectItemCaseSensitive(root, "body");
+        if (response && response_len > 0) {
+            response[0] = '\0';
+            if (body) {
+                char *printed = cJSON_PrintUnformatted(body);
+                if (printed) {
+                    strlcpy(response, printed, response_len);
+                    cJSON_free(printed);
+                }
+            }
+        }
+        cJSON_Delete(root);
+        return ESP_OK;
+    }
+    return ESP_ERR_TIMEOUT;
+}
+
+static esp_err_t usb_bridge_send_request(cJSON *request, const char *request_id,
+                                         char *response, int response_len, int timeout_ms)
+{
+    char *json = cJSON_PrintUnformatted(request);
+    ESP_RETURN_ON_FALSE(json != NULL, ESP_ERR_NO_MEM, TAG, "usb json");
+    size_t line_len = strlen(USB_BRIDGE_PREFIX) + strlen(json) + 2;
+    char *line = heap_caps_malloc(line_len, MALLOC_CAP_8BIT);
+    if (!line) {
+        cJSON_free(json);
+        return ESP_ERR_NO_MEM;
+    }
+    snprintf(line, line_len, "%s%s\n", USB_BRIDGE_PREFIX, json);
+    cJSON_free(json);
+
+    usb_bridge_drain_input();
+    int written = usb_serial_jtag_write_bytes(line, strlen(line), pdMS_TO_TICKS(50));
+    heap_caps_free(line);
+    if (written <= 0) {
+        return ESP_ERR_TIMEOUT;
+    }
+    (void)usb_serial_jtag_wait_tx_done(pdMS_TO_TICKS(50));
+    return usb_bridge_read_response(request_id, response, response_len, timeout_ms);
+}
+
+static esp_err_t usb_bridge_request_timeout(const char *method, const char *path, const char *body,
+                                            char *response, int response_len, int timeout_ms)
+{
+    if (!usb_bridge_should_try()) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+
+    char request_id[16];
+    usb_bridge_request_id(request_id, sizeof(request_id));
+    cJSON *request = cJSON_CreateObject();
+    ESP_RETURN_ON_FALSE(request != NULL, ESP_ERR_NO_MEM, TAG, "usb request");
+    cJSON_AddStringToObject(request, "id", request_id);
+    cJSON_AddStringToObject(request, "method", method);
+    cJSON_AddStringToObject(request, "path", path);
+    if (body) {
+        cJSON *body_json = cJSON_Parse(body);
+        if (body_json) {
+            cJSON_AddItemToObject(request, "body", body_json);
+        }
+    }
+    esp_err_t err = usb_bridge_send_request(request, request_id, response, response_len, timeout_ms);
+    cJSON_Delete(request);
+    s_usb_bridge_active = err == ESP_OK;
+    return err;
+}
+
+static esp_err_t bridge_request_timeout(const char *method, const char *path, const char *body,
+                                        char *response, int response_len, int timeout_ms)
+{
+    esp_err_t usb_err = usb_bridge_request_timeout(method, path, body, response, response_len,
+                                                   USB_BRIDGE_TIMEOUT_MS);
+    if (usb_err == ESP_OK) {
+        return ESP_OK;
+    }
+    s_usb_bridge_active = false;
+    return http_request_timeout(method, path, body, response, response_len, timeout_ms);
+}
+
+static esp_err_t bridge_request(const char *method, const char *path, const char *body,
+                                char *response, int response_len)
+{
+    return bridge_request_timeout(method, path, body, response, response_len, 2500);
+}
+
+static esp_err_t usb_bridge_post_binary(const char *path, const uint8_t *body, size_t body_len,
+                                        char *response, int response_len)
+{
+    if (!usb_bridge_should_try()) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    size_t offset = 0;
+    bool sent_any = false;
+    while (offset < body_len || !sent_any) {
+        size_t chunk_len = body_len - offset;
+        if (chunk_len > USB_BRIDGE_AUDIO_CHUNK_BYTES) {
+            chunk_len = USB_BRIDGE_AUDIO_CHUNK_BYTES;
+        }
+        bool final = (offset + chunk_len) >= body_len;
+        size_t encoded_len = 0;
+        (void)mbedtls_base64_encode(NULL, 0, &encoded_len, body + offset, chunk_len);
+        unsigned char *encoded = heap_caps_malloc(encoded_len + 1, MALLOC_CAP_8BIT);
+        ESP_RETURN_ON_FALSE(encoded != NULL, ESP_ERR_NO_MEM, TAG, "usb base64");
+        esp_err_t err = ESP_OK;
+        size_t written_len = 0;
+        if (mbedtls_base64_encode(encoded, encoded_len + 1, &written_len, body + offset, chunk_len) != 0) {
+            heap_caps_free(encoded);
+            return ESP_FAIL;
+        }
+        encoded[written_len] = '\0';
+
+        char request_id[16];
+        usb_bridge_request_id(request_id, sizeof(request_id));
+        cJSON *request = cJSON_CreateObject();
+        if (!request) {
+            heap_caps_free(encoded);
+            return ESP_ERR_NO_MEM;
+        }
+        cJSON_AddStringToObject(request, "id", request_id);
+        cJSON_AddStringToObject(request, "method", "POST");
+        cJSON_AddStringToObject(request, "path", path);
+        cJSON_AddStringToObject(request, "encoding", "base64");
+        cJSON_AddStringToObject(request, "body", (const char *)encoded);
+        cJSON_AddBoolToObject(request, "final", final);
+        cJSON_AddNumberToObject(request, "sample_rate", 16000);
+        cJSON_AddNumberToObject(request, "channels", 1);
+        cJSON_AddNumberToObject(request, "bits_per_sample", 16);
+        err = usb_bridge_send_request(request, request_id,
+                                      final ? response : NULL,
+                                      final ? response_len : 0,
+                                      final ? 30000 : 1200);
+        cJSON_Delete(request);
+        heap_caps_free(encoded);
+        if (err != ESP_OK) {
+            s_usb_bridge_active = false;
+            return err;
+        }
+        s_usb_bridge_active = true;
+        sent_any = true;
+        offset += chunk_len;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t bridge_post_binary(const char *path, const uint8_t *body, size_t body_len,
+                                    char *response, int response_len)
+{
+    esp_err_t usb_err = usb_bridge_post_binary(path, body, body_len, response, response_len);
+    if (usb_err == ESP_OK) {
+        return ESP_OK;
+    }
+    s_usb_bridge_active = false;
+    return http_post_binary(path, body, body_len, response, response_len);
 }
 
 static void copy_json_string(cJSON *root, const char *key, char *target, size_t target_len)
@@ -1136,6 +1425,7 @@ static bool parse_state_json(const char *json)
     }
 
     copy_json_string(state_root, "time", s_state.time, sizeof(s_state.time));
+    copy_json_string(state_root, "computer_name", s_state.computer_name, sizeof(s_state.computer_name));
     cJSON *wifi = cJSON_GetObjectItemCaseSensitive(state_root, "wifi");
     cJSON *ble = cJSON_GetObjectItemCaseSensitive(state_root, "ble");
     s_state.wifi = cJSON_IsBool(wifi) ? cJSON_IsTrue(wifi) : s_state.wifi;
@@ -1197,7 +1487,7 @@ static void poll_state(void)
         last_charging = s_state.battery_charging;
         last_usb_powered = s_state.usb_powered;
     }
-    esp_err_t err = http_request("GET", VIBE_STICK_STATE_PATH, NULL, response, sizeof(response));
+    esp_err_t err = bridge_request("GET", VIBE_STICK_STATE_PATH, NULL, response, sizeof(response));
     if (err != ESP_OK || response[0] == '\0' || !parse_state_json(response)) {
         provider_display_state_t *display_state = current_provider_display_state();
         strlcpy(display_state->status, "OFFLINE", sizeof(display_state->status));
@@ -1215,7 +1505,7 @@ static void post_simple_event(const char *event_name, const char *path)
     snprintf(body, sizeof(body), "{\"event\":\"%s\",\"source\":\"sticks3\"}", event_name);
     char response[512] = {0};
     const char *target_path = path ? path : VIBE_STICK_EVENT_PATH;
-    esp_err_t err = http_request("POST", target_path, body, response, sizeof(response));
+    esp_err_t err = bridge_request("POST", target_path, body, response, sizeof(response));
     if (err == ESP_OK && response[0] != '\0' && parse_state_json(response)) {
         render_state();
     }
@@ -1286,26 +1576,27 @@ static void generate_recording_session_id(char *session_id, size_t session_id_le
     session_id[32] = '\0';
 }
 
-static void upload_recording_audio(void)
+static bool upload_recording_audio(void)
 {
     size_t audio_len = 0;
     const uint8_t *audio = vibe_audio_data(&audio_len);
     if (!audio || audio_len == 0 || s_recording_session_id[0] == '\0') {
         ESP_LOGW(TAG, "skip audio upload audio=%p len=%u session=%s",
                  audio, (unsigned)audio_len, s_recording_session_id);
-        return;
+        return false;
     }
     char path[96];
     snprintf(path, sizeof(path), "%s?session_id=%s", VIBE_STICK_RECORDING_AUDIO_PATH, s_recording_session_id);
     char response[768] = {0};
-    esp_err_t err = http_post_binary(path, audio, audio_len, response, sizeof(response));
+    esp_err_t err = bridge_post_binary(path, audio, audio_len, response, sizeof(response));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "audio upload failed: %s", esp_err_to_name(err));
-        return;
+        return false;
     }
     if (response[0] != '\0' && parse_state_json(response)) {
         render_state();
     }
+    return true;
 }
 
 static void handle_recording_start(void)
@@ -1313,6 +1604,7 @@ static void handle_recording_start(void)
     generate_recording_session_id(s_recording_session_id, sizeof(s_recording_session_id));
     if (s_recording_session_id[0] == '\0') {
         ESP_LOGW(TAG, "recording start failed: no session id");
+        (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
         return;
     }
 
@@ -1320,6 +1612,7 @@ static void handle_recording_start(void)
     if (audio_err != ESP_OK) {
         ESP_LOGW(TAG, "hardware recording start failed: %s", esp_err_to_name(audio_err));
         s_recording_session_id[0] = '\0';
+        (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
         return;
     }
     show_recording_overlay("正在聆听", "松开发送", true);
@@ -1330,7 +1623,7 @@ static void handle_recording_start(void)
              "\"audio_source\":\"sticks3_pcm\",\"session_id\":\"%s\"}",
              s_recording_session_id);
     char response[1024] = {0};
-    esp_err_t err = http_request("POST", VIBE_STICK_RECORDING_START_PATH, body, response, sizeof(response));
+    esp_err_t err = bridge_request("POST", VIBE_STICK_RECORDING_START_PATH, body, response, sizeof(response));
     if (err == ESP_OK && response[0] != '\0') {
         char response_session_id[40] = {0};
         parse_recording_session_id(response, response_session_id, sizeof(response_session_id));
@@ -1363,13 +1656,13 @@ static void handle_recording_stop(void)
         ESP_LOGW(TAG, "hardware recording stop failed: %s", esp_err_to_name(audio_err));
     }
 
-    upload_recording_audio();
+    bool upload_ok = upload_recording_audio();
     vibe_audio_clear();
 
     show_recording_overlay("正在识别", "", true);
     const char *body = "{\"event\":\"button_long_stop\",\"source\":\"sticks3\",\"paste\":true}";
     char response[1024] = {0};
-    esp_err_t err = http_request_timeout("POST", VIBE_STICK_RECORDING_STOP_PATH, body, response, sizeof(response), 30000);
+    esp_err_t err = bridge_request_timeout("POST", VIBE_STICK_RECORDING_STOP_PATH, body, response, sizeof(response), 30000);
     bool recording_failed = false;
     char recording_status[32] = {0};
     if (err == ESP_OK && response[0] != '\0') {
@@ -1383,12 +1676,13 @@ static void handle_recording_stop(void)
             render_state();
         }
     }
-    if (err != ESP_OK || recording_failed) {
+    if (!upload_ok || err != ESP_OK || recording_failed) {
         ESP_LOGW(TAG, "recording stop bridge request failed: %s", esp_err_to_name(err));
         const char *title = (strcmp(recording_status, "audio_skipped") == 0 ||
                              strcmp(recording_status, "transcript_rejected") == 0)
             ? "未听清" : "识别失败";
         show_recording_overlay(title, "", true);
+        (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
         vTaskDelay(pdMS_TO_TICKS(900));
     }
     s_recording_session_id[0] = '\0';
@@ -1441,6 +1735,7 @@ static void button_single_click_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    note_user_activity();
     queue_event(VIBE_STICK_EVENT_SHORT_PRESS);
 }
 
@@ -1448,6 +1743,7 @@ static void button_double_click_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    note_user_activity();
     queue_event(VIBE_STICK_EVENT_DOUBLE_CLICK);
 }
 
@@ -1455,6 +1751,7 @@ static void side_button_single_click_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    note_user_activity();
     queue_event(VIBE_STICK_EVENT_PROVIDER_NEXT);
 }
 
@@ -1462,6 +1759,7 @@ static void button_long_start_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    note_user_activity();
     s_long_press_active = true;
     queue_event(VIBE_STICK_EVENT_LONG_START);
 }
@@ -1470,6 +1768,7 @@ static void button_up_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    note_user_activity();
     if (s_long_press_active) {
         s_long_press_active = false;
         queue_event(VIBE_STICK_EVENT_LONG_STOP);
@@ -1520,10 +1819,11 @@ static void app_task(void *arg)
     int64_t last_poll = 0;
     while (true) {
         int64_t now_ms = esp_timer_get_time() / 1000;
-        if (s_wifi_connected && now_ms - last_poll >= VIBE_STICK_STATE_POLL_MS) {
+        if (now_ms - last_poll >= VIBE_STICK_STATE_POLL_MS) {
             last_poll = now_ms;
             poll_state();
         }
+        maybe_sleep_display();
         if (xQueueReceive(s_event_queue, &event, pdMS_TO_TICKS(100)) != pdTRUE) {
             continue;
         }
@@ -1567,6 +1867,7 @@ void app_main(void)
     s_event_queue = xQueueCreate(10, sizeof(agent_event_t));
     s_lvgl_lock = xSemaphoreCreateMutex();
     ESP_ERROR_CHECK(init_display());
+    s_last_user_activity_ms = now_ms();
     lvgl_lock();
     create_ui();
     lvgl_unlock();

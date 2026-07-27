@@ -13,7 +13,7 @@ VibeStick targets M5Stack StickS3 hardware and is not an official M5Stack projec
 ## What you'll need (prepare first)
 
 - [ ] M5Stack StickS3 and a USB-C data cable.
-- [ ] A Mac on the same network as the StickS3.
+- [ ] A Mac on the same network as the StickS3. Optional: a Windows PC connected by USB-C for USB bridge switching.
 - [ ] Wi-Fi name and password. The Wi-Fi must be 2.4 GHz; StickS3 / ESP32-S3 does not support 5 GHz Wi-Fi.
 - [ ] To show Claude 5H/7D usage: this feature is off by default (safer). It needs the Claude Code CLI (run `claude` then `/login` in Terminal) and `VIBE_STICK_CLAUDE_USAGE=on` in `.env`.
 - [ ] An ASR API key for speech transcription. Recommended: SiliconFlow at <https://cloud.siliconflow.cn/i/7ZCoy9fU>. It works directly in China, has free quota, and is OpenAI-compatible. The demo video uses SiliconFlow. You can also use another OpenAI-compatible ASR provider's `base_url` and model name instead.
@@ -107,6 +107,18 @@ If Codex works but the Claude column shows `--%`, that is expected: Claude usage
 
 11. 👤 Open any text box, long-press the front blue button, speak, and release. VibeStick should transcribe and paste the text automatically.
 
+### Optional Windows USB bridge
+
+To switch the StickS3 to a Windows computer, install the Windows bridge on that PC and plug the StickS3 into it with a USB-C data cable:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install_windows.ps1
+& "$env:APPDATA\VibeStick\run-vibestick-usb-bridge.cmd"
+```
+
+Pass `-Port COM5` to `install_windows.ps1` if automatic port scanning picks the wrong device. While the USB bridge responds, the StickS3 uses that computer for state, alerts, recording transcription, and paste injection. When the cable is unplugged or the USB bridge is not running, it falls back to the Wi-Fi bridge configured in firmware.
+
 For development without installing LaunchAgents, run `./scripts/dev.sh` from the repository root instead of `./scripts/install.sh`.
 
 ## Troubleshooting
@@ -163,6 +175,7 @@ Empty values in `.env` generally mean "use the built-in default". `scripts/dev.s
 
 - `VIBE_STICK_PROJECT_ROOT`: project root used for local Codex session observation.
 - `VIBE_STICK_PROJECT_NAME`: optional display-name override.
+- `VIBE_STICK_COMPUTER_NAME`: optional computer-name override shown on the StickS3 home screen.
 - `VIBE_STICK_PROVIDER`: active provider selection, `auto`, `codex`, or `claude`; default `auto`.
 - `VIBE_STICK_BRIDGE_TOKEN`: shared token required whenever the bridge binds outside loopback, such as `0.0.0.0`.
 - `VIBE_STICK_MAX_RECORDING_AUDIO_BYTES`: max `/recording/audio` body size, default `2000000`.
@@ -257,6 +270,9 @@ idf.py build
 
 - This is a cleaned prototype, not a packaged Mac app or DMG.
 - The firmware targets M5Stack StickS3 only.
+- The home screen prioritizes provider status and computer name; 5H/7D quota values are still available in bridge state but are not shown on the current low-power UI.
+- The screen dims lower than before and turns off after 5 seconds of inactivity. Button presses and alerts wake it.
+- Windows support is script-based. It needs Python 3.11+ and `pyserial`; the generated runner is not a signed Windows app.
 - Codex quota is inferred from local Codex session JSONL events with `rate_limits`; it is not an official quota API.
 - Claude usage comes from an undocumented Claude Code OAuth endpoint and is disabled by default.
 - ASR reliability depends on microphone capture, uploaded PCM quality, provider availability, and configured model.

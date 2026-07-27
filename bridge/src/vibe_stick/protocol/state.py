@@ -59,6 +59,7 @@ class VibeStickState:
     wifi: bool
     ble: bool
     battery: int | None
+    computer_name: str
     active_provider: str
     provider: ProviderState
     codex: CodexState
@@ -93,6 +94,7 @@ def state_from_dict(data: dict[str, Any]) -> VibeStickState:
         wifi=bool(data.get("wifi", True)),
         ble=bool(data.get("ble", False)),
         battery=data.get("battery"),
+        computer_name=str(data.get("computer_name") or "Computer"),
         active_provider=str(data.get("active_provider") or provider_state.id),
         provider=provider_state,
         codex=CodexState(
@@ -152,6 +154,7 @@ def default_state() -> VibeStickState:
         wifi=True,
         ble=False,
         battery=None,
+        computer_name="Computer",
         active_provider="codex",
         provider=ProviderState(
             id="codex",

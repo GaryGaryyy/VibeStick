@@ -2,7 +2,7 @@
 
 #define VIBE_STICK_DEVICE_NAME "VibeStick"
 #define FIRMWARE_NAME "vibestick"
-#define FIRMWARE_VERSION "0.1.4"
+#define FIRMWARE_VERSION "0.1.5"
 #define TRANSPORT "HTTP"
 #define VIBE_STICK_STATE_PATH "/state"
 #define VIBE_STICK_EVENT_PATH "/event"
@@ -23,4 +23,8 @@
 
 #ifndef VIBE_STICK_BRIDGE_TOKEN
 #define VIBE_STICK_BRIDGE_TOKEN ""
+#endif
+
+#ifndef VIBE_STICK_USB_BRIDGE_ENABLED
+#define VIBE_STICK_USB_BRIDGE_ENABLED 1
 #endif

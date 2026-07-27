@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import platform
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -172,7 +174,7 @@ def _alert_from_payload(
         return (AgentStatus.DONE, "DONE", "Codex task completed")
     if "approval" in normalized or "permission" in normalized:
         return (AgentStatus.APPROVAL, "APPROVAL", "Codex is waiting for approval")
-    if normalized in {"error", "agent_error"} or normalized.endswith("_error"):
+    if normalized in {"error", "agent_error", "task_failed", "turn_failed"} or normalized.endswith("_error"):
         message = str(payload.get("message") or payload.get("error") or "Codex task failed or needs attention")
         return (AgentStatus.ERROR, "ERROR", message)
     rate_limit_reached = payload.get("rate_limit_reached_type")
@@ -198,6 +200,8 @@ def _is_newer(value: datetime, other: datetime | None) -> bool:
 
 
 def _codex_process_running() -> bool:
+    if platform.system() == "Windows":
+        return _windows_codex_process_running()
     try:
         result = subprocess.run(
             ["ps", "-axo", "command="],
@@ -212,12 +216,48 @@ def _codex_process_running() -> bool:
         return False
 
     for line in result.stdout.splitlines():
-        lower = line.lower()
-        if "/applications/codex.app/" in lower:
-            return True
-        if "codex app-server" in lower:
+        if _command_is_codex_process(line):
             return True
     return False
+
+
+def _windows_codex_process_running() -> bool:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -match '^(codex|ChatGPT)\\.exe$' -or $_.CommandLine -match 'codex' } | "
+        "ForEach-Object { $_.CommandLine }",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    return any(_command_is_codex_process(line) for line in result.stdout.splitlines())
+
+
+def _command_is_codex_process(command: str) -> bool:
+    lower = command.lower()
+    if "/applications/codex.app/" in lower:
+        return True
+    if re.search(r"\\codex(\.exe)?(\s|$)", lower) and _has_app_server_arg(lower):
+        return True
+    if "/contents/resources/codex " in lower and _has_app_server_arg(lower):
+        return True
+    return bool(re.search(r"(^|[/\s])codex(\s|$)", lower) and _has_app_server_arg(lower))
+
+
+def _has_app_server_arg(command: str) -> bool:
+    return bool(re.search(r"(^|\s)app-server(\s|$)", command))
 
 
 def _project_name_from_env_or_root(project_root: Path) -> str:

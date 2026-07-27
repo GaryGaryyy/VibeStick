@@ -16,6 +16,10 @@ class ServerProviderTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"VIBE_STICK_PROVIDER": "bogus"}):
             self.assertEqual(app._configured_provider(), "auto")
 
+    def test_computer_name_prefers_environment_override(self) -> None:
+        with mock.patch.dict(os.environ, {"VIBE_STICK_COMPUTER_NAME": "Desk PC"}):
+            self.assertEqual(app._computer_name(), "Desk PC")
+
     def test_select_active_provider_respects_pinned_config(self) -> None:
         self.assertEqual(app._select_active_provider("claude", "codex", self._obs("codex"), self._obs("claude")), "claude")
 

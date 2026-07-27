@@ -8,6 +8,7 @@
 - Added a Windows Wi-Fi bridge runner script. Runtime state, alerts, recording, and paste handling stay on Wi-Fi.
 - Bridge state now includes `computer_name`, with `VIBE_STICK_COMPUTER_NAME` as an override.
 - Project names are no longer exposed in bridge state or rendered on the StickS3 home screen.
+- Added simple LAN computer discovery: the StickS3 broadcasts over Wi-Fi, passes its bridge token, and stores the selected bridge host.
 
 ## v0.1.4
 

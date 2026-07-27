@@ -9,6 +9,22 @@ Default bridge URL:
 http://<mac-ip>:8765
 ```
 
+## UDP Discovery
+
+The bridge listens on UDP port `8766`. A StickS3 can broadcast:
+
+```json
+{"type":"vibestick_discover","token":"<bridge-token>","device":"VibeStick"}
+```
+
+The bridge responds to the sender:
+
+```json
+{"type":"vibestick_bridge","name":"Desk PC","port":8765,"version":"0.1.5"}
+```
+
+The StickS3 uses the response sender IP as the bridge host. If the bridge has no configured token, it remembers the token from discovery for later HTTP requests.
+
 ## Firmware Headers
 
 Firmware requests include:
@@ -34,7 +50,7 @@ When `VIBE_STICK_BRIDGE_TOKEN` is configured on the bridge and firmware, protect
 X-Vibe-Stick-Token: <shared-token>
 ```
 
-Protected endpoints are `/event`, `/quota/refresh`, `/recording/start`, `/recording/audio`, and `/recording/stop`. If the bridge binds outside loopback, such as `0.0.0.0`, `VIBE_STICK_BRIDGE_TOKEN` is required and placeholder tokens are rejected. If the bridge binds to loopback only, missing tokens are allowed for local development.
+Protected endpoints are `/event`, `/quota/refresh`, `/recording/start`, `/recording/audio`, and `/recording/stop`. When the bridge has a configured or discovery-paired token, POST requests must include it. If no token is available yet, the personal-LAN bridge accepts requests so first-time Wi-Fi pairing stays simple.
 
 ## GET /state
 

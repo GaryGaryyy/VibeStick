@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "vibe_audio.h"
 #include "vibe_board.h"
@@ -27,9 +28,12 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "lwip/inet.h"
+#include "lwip/sockets.h"
 #include "vibe_stick_ui_assets.h"
 #include "iot_button.h"
 #include "lvgl.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 #define LCD_HOST SPI2_HOST
@@ -45,6 +49,15 @@
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
 #define LCD_SLEEP_TIMEOUT_MS 5000
+#define BRIDGE_HOST_LEN 64
+#define BRIDGE_NAME_LEN 48
+#define BRIDGE_DISCOVERY_PORT 8766
+#define BRIDGE_DISCOVERY_TIMEOUT_MS 1400
+#define BRIDGE_DISCOVERY_PACKET_BYTES 512
+#define BRIDGE_CANDIDATE_COUNT 6
+#define VIBE_STICK_NVS_NAMESPACE "vibestick"
+#define VIBE_STICK_NVS_BRIDGE_HOST "bridge_host"
+#define VIBE_STICK_NVS_BRIDGE_PORT "bridge_port"
 
 #define PIN_BUTTON_FRONT 11
 #define PIN_BUTTON_SIDE 12
@@ -64,6 +77,9 @@ typedef enum {
     VIBE_STICK_EVENT_LONG_START,
     VIBE_STICK_EVENT_LONG_STOP,
     VIBE_STICK_EVENT_PROVIDER_NEXT,
+    VIBE_STICK_EVENT_BRIDGE_SCAN,
+    VIBE_STICK_EVENT_BRIDGE_NEXT,
+    VIBE_STICK_EVENT_BRIDGE_SELECT,
 } agent_event_type_t;
 
 typedef struct {
@@ -122,6 +138,12 @@ typedef struct {
     int used;
 } http_response_capture_t;
 
+typedef struct {
+    char name[BRIDGE_NAME_LEN];
+    char host[BRIDGE_HOST_LEN];
+    int port;
+} bridge_candidate_t;
+
 static QueueHandle_t s_event_queue;
 static SemaphoreHandle_t s_lvgl_lock;
 static bool s_wifi_connected;
@@ -133,6 +155,12 @@ static bool s_alert_sound_baseline_ready;
 static char s_recording_session_id[40];
 static bool s_display_awake = true;
 static int64_t s_last_user_activity_ms;
+static char s_bridge_host[BRIDGE_HOST_LEN] = VIBE_STICK_BRIDGE_HOST;
+static int s_bridge_port = VIBE_STICK_BRIDGE_PORT;
+static bridge_candidate_t s_bridge_candidates[BRIDGE_CANDIDATE_COUNT];
+static int s_bridge_candidate_count;
+static int s_bridge_candidate_index;
+static bool s_bridge_picker_visible;
 
 static lv_display_t *s_display;
 static esp_lcd_panel_handle_t s_panel;
@@ -155,6 +183,11 @@ static lv_obj_t *s_quota_7d_label;
 static lv_obj_t *s_quota_status_label;
 static lv_obj_t *s_computer_title_label;
 static lv_obj_t *s_computer_name_label;
+static lv_obj_t *s_bridge_picker_overlay;
+static lv_obj_t *s_bridge_picker_title;
+static lv_obj_t *s_bridge_picker_name;
+static lv_obj_t *s_bridge_picker_host;
+static lv_obj_t *s_bridge_picker_hint;
 static lv_obj_t *s_recording_overlay;
 static lv_obj_t *s_recording_wave_group;
 static lv_obj_t *s_recording_wave_bars[5];
@@ -239,6 +272,7 @@ static const lv_point_precise_t s_battery_bolt_points[] = {
 };
 
 static void render_state(void);
+static void poll_state(void);
 
 static void queue_event(agent_event_type_t type)
 {
@@ -333,6 +367,48 @@ static void switch_provider(void)
     const agent_provider_config_t *provider = current_provider_config();
     ESP_LOGI(TAG, "provider switched to %s", provider->key);
     render_state();
+}
+
+static void set_bridge_target(const char *host, int port, bool persist)
+{
+    if (!host || host[0] == '\0') {
+        return;
+    }
+    strlcpy(s_bridge_host, host, sizeof(s_bridge_host));
+    s_bridge_port = port > 0 ? port : VIBE_STICK_BRIDGE_PORT;
+    ESP_LOGI(TAG, "bridge target %s:%d", s_bridge_host, s_bridge_port);
+    if (!persist) {
+        return;
+    }
+
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(VIBE_STICK_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "bridge target nvs open failed: %s", esp_err_to_name(err));
+        return;
+    }
+    ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_set_str(handle, VIBE_STICK_NVS_BRIDGE_HOST, s_bridge_host));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_set_i32(handle, VIBE_STICK_NVS_BRIDGE_PORT, s_bridge_port));
+    ESP_ERROR_CHECK_WITHOUT_ABORT(nvs_commit(handle));
+    nvs_close(handle);
+}
+
+static void load_bridge_target(void)
+{
+    nvs_handle_t handle = 0;
+    esp_err_t err = nvs_open(VIBE_STICK_NVS_NAMESPACE, NVS_READONLY, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGI(TAG, "using default bridge target %s:%d", s_bridge_host, s_bridge_port);
+        return;
+    }
+    char host[BRIDGE_HOST_LEN] = "";
+    size_t host_len = sizeof(host);
+    int32_t port = VIBE_STICK_BRIDGE_PORT;
+    if (nvs_get_str(handle, VIBE_STICK_NVS_BRIDGE_HOST, host, &host_len) == ESP_OK && host[0] != '\0') {
+        (void)nvs_get_i32(handle, VIBE_STICK_NVS_BRIDGE_PORT, &port);
+        set_bridge_target(host, (int)port, false);
+    }
+    nvs_close(handle);
 }
 
 static void lvgl_lock(void)
@@ -786,6 +862,28 @@ static void create_ui(void)
     s_recording_hint = make_label(s_recording_overlay, "松开发送", FONT_CN,
                                   lv_color_hex(0x8b9098), 120, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_recording_hint, LV_ALIGN_BOTTOM_MID, 0, -22);
+
+    s_bridge_picker_overlay = lv_obj_create(screen);
+    lv_obj_set_size(s_bridge_picker_overlay, LCD_H_RES, LCD_V_RES);
+    lv_obj_align(s_bridge_picker_overlay, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_radius(s_bridge_picker_overlay, 0, 0);
+    lv_obj_set_style_bg_color(s_bridge_picker_overlay, lv_color_hex(0x050608), 0);
+    lv_obj_set_style_bg_opa(s_bridge_picker_overlay, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_bridge_picker_overlay, 0, 0);
+    lv_obj_add_flag(s_bridge_picker_overlay, LV_OBJ_FLAG_HIDDEN);
+
+    s_bridge_picker_title = make_label(s_bridge_picker_overlay, "选择电脑", FONT_CN,
+                                       lv_color_hex(0x8a9099), 120, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align(s_bridge_picker_title, LV_ALIGN_TOP_MID, 0, 28);
+    s_bridge_picker_name = make_wrap_label(s_bridge_picker_overlay, "搜索中", FONT_CN,
+                                           lv_color_hex(0xf3f4f6), 118, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align(s_bridge_picker_name, LV_ALIGN_CENTER, 0, -18);
+    s_bridge_picker_host = make_label(s_bridge_picker_overlay, "", &lv_font_montserrat_12,
+                                      lv_color_hex(0x9aa0aa), 120, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align(s_bridge_picker_host, LV_ALIGN_CENTER, 0, 26);
+    s_bridge_picker_hint = make_label(s_bridge_picker_overlay, "右键下移  蓝键确定", FONT_CN,
+                                      lv_color_hex(0x8b9098), 130, LV_TEXT_ALIGN_CENTER);
+    lv_obj_align(s_bridge_picker_hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 }
 
 static void set_quota_label(lv_obj_t *bar, lv_obj_t *label, int value, bool valid, lv_color_t accent_color)
@@ -895,6 +993,184 @@ static void show_recording_overlay(const char *title, const char *hint, bool vis
     lvgl_unlock();
 }
 
+static void show_bridge_picker(bool visible)
+{
+    lvgl_lock();
+    s_bridge_picker_visible = visible;
+    if (visible) {
+        lv_obj_clear_flag(s_bridge_picker_overlay, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_bridge_picker_overlay, LV_OBJ_FLAG_HIDDEN);
+    }
+    lvgl_unlock();
+}
+
+static void render_bridge_picker(const char *name, const char *host, const char *hint)
+{
+    lvgl_lock();
+    lv_label_set_text(s_bridge_picker_name, name ? name : "");
+    lv_label_set_text(s_bridge_picker_host, host ? host : "");
+    lv_label_set_text(s_bridge_picker_hint, hint ? hint : "");
+    lvgl_unlock();
+}
+
+static void render_current_bridge_candidate(void)
+{
+    if (s_bridge_candidate_count <= 0) {
+        render_bridge_picker("未找到电脑", "", "右键重搜");
+        return;
+    }
+    if (s_bridge_candidate_index < 0 || s_bridge_candidate_index >= s_bridge_candidate_count) {
+        s_bridge_candidate_index = 0;
+    }
+    const bridge_candidate_t *candidate = &s_bridge_candidates[s_bridge_candidate_index];
+    char host_text[96];
+    snprintf(host_text, sizeof(host_text), "%s:%d  %d/%d",
+             candidate->host, candidate->port,
+             s_bridge_candidate_index + 1, s_bridge_candidate_count);
+    render_bridge_picker(candidate->name, host_text, "右键下移  蓝键确定");
+}
+
+static bool bridge_candidate_exists(const char *host, int port)
+{
+    for (int i = 0; i < s_bridge_candidate_count; ++i) {
+        if (strcmp(s_bridge_candidates[i].host, host) == 0 && s_bridge_candidates[i].port == port) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void add_bridge_candidate(const char *name, const char *host, int port)
+{
+    if (!host || host[0] == '\0' || s_bridge_candidate_count >= BRIDGE_CANDIDATE_COUNT) {
+        return;
+    }
+    port = port > 0 ? port : VIBE_STICK_BRIDGE_PORT;
+    if (bridge_candidate_exists(host, port)) {
+        return;
+    }
+    bridge_candidate_t *candidate = &s_bridge_candidates[s_bridge_candidate_count++];
+    strlcpy(candidate->host, host, sizeof(candidate->host));
+    strlcpy(candidate->name, (name && name[0] != '\0') ? name : host, sizeof(candidate->name));
+    candidate->port = port;
+}
+
+static void parse_bridge_discovery_response(const char *response, const char *host)
+{
+    cJSON *root = cJSON_Parse(response);
+    if (!root) {
+        return;
+    }
+    cJSON *type = cJSON_GetObjectItemCaseSensitive(root, "type");
+    if (!cJSON_IsString(type) || strcmp(type->valuestring, "vibestick_bridge") != 0) {
+        cJSON_Delete(root);
+        return;
+    }
+    cJSON *name = cJSON_GetObjectItemCaseSensitive(root, "name");
+    cJSON *port_json = cJSON_GetObjectItemCaseSensitive(root, "port");
+    int port = cJSON_IsNumber(port_json) ? port_json->valueint : VIBE_STICK_BRIDGE_PORT;
+    add_bridge_candidate(cJSON_IsString(name) ? name->valuestring : host, host, port);
+    cJSON_Delete(root);
+}
+
+static void discover_bridges(void)
+{
+    s_bridge_candidate_count = 0;
+    s_bridge_candidate_index = 0;
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) {
+        ESP_LOGW(TAG, "discovery socket failed");
+        return;
+    }
+
+    int broadcast_enable = 1;
+    (void)setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast_enable, sizeof(broadcast_enable));
+    struct timeval timeout = {
+        .tv_sec = 0,
+        .tv_usec = 220000,
+    };
+    (void)setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    struct sockaddr_in target = {0};
+    target.sin_family = AF_INET;
+    target.sin_port = htons(BRIDGE_DISCOVERY_PORT);
+    target.sin_addr.s_addr = INADDR_BROADCAST;
+
+    char request[256];
+    snprintf(request, sizeof(request),
+             "{\"type\":\"vibestick_discover\",\"token\":\"%s\",\"device\":\"%s\"}",
+             VIBE_STICK_BRIDGE_TOKEN, VIBE_STICK_DEVICE_NAME);
+    (void)sendto(sock, request, strlen(request), 0, (struct sockaddr *)&target, sizeof(target));
+
+    struct sockaddr_in current = {0};
+    current.sin_family = AF_INET;
+    current.sin_port = htons(BRIDGE_DISCOVERY_PORT);
+    current.sin_addr.s_addr = inet_addr(s_bridge_host);
+    if (current.sin_addr.s_addr != INADDR_NONE) {
+        (void)sendto(sock, request, strlen(request), 0, (struct sockaddr *)&current, sizeof(current));
+    }
+
+    const int64_t deadline = now_ms() + BRIDGE_DISCOVERY_TIMEOUT_MS;
+    while (now_ms() < deadline) {
+        char buffer[BRIDGE_DISCOVERY_PACKET_BYTES];
+        struct sockaddr_in source = {0};
+        socklen_t source_len = sizeof(source);
+        int received = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
+                                (struct sockaddr *)&source, &source_len);
+        if (received <= 0) {
+            continue;
+        }
+        buffer[received] = '\0';
+        char host[BRIDGE_HOST_LEN] = "";
+        inet_ntoa_r(source.sin_addr, host, sizeof(host));
+        parse_bridge_discovery_response(buffer, host);
+    }
+    closesocket(sock);
+}
+
+static void start_bridge_scan(void)
+{
+    if (!s_wifi_connected || s_recording_overlay_visible || vibe_audio_is_recording()) {
+        render_bridge_picker("WiFi未连接", "", "稍后重试");
+        show_bridge_picker(true);
+        return;
+    }
+    show_bridge_picker(true);
+    render_bridge_picker("搜索中", "", "请稍候");
+    discover_bridges();
+    render_current_bridge_candidate();
+}
+
+static void bridge_picker_next(void)
+{
+    if (!s_bridge_picker_visible) {
+        return;
+    }
+    if (s_bridge_candidate_count <= 0) {
+        start_bridge_scan();
+        return;
+    }
+    s_bridge_candidate_index = (s_bridge_candidate_index + 1) % s_bridge_candidate_count;
+    render_current_bridge_candidate();
+}
+
+static void bridge_picker_select(void)
+{
+    if (!s_bridge_picker_visible) {
+        return;
+    }
+    if (s_bridge_candidate_count <= 0) {
+        show_bridge_picker(false);
+        render_state();
+        return;
+    }
+    const bridge_candidate_t *candidate = &s_bridge_candidates[s_bridge_candidate_index];
+    set_bridge_target(candidate->host, candidate->port, true);
+    show_bridge_picker(false);
+    poll_state();
+}
+
 static bool sound_for_alert_type(const char *type, agent_sound_t *sound)
 {
     if (strcmp(type, "DONE") == 0 ||
@@ -999,7 +1275,7 @@ static esp_err_t http_request_timeout(const char *method, const char *path, cons
                                       char *response, int response_len, int timeout_ms)
 {
     char url[160];
-    snprintf(url, sizeof(url), "http://%s:%d%s", VIBE_STICK_BRIDGE_HOST, VIBE_STICK_BRIDGE_PORT, path);
+    snprintf(url, sizeof(url), "http://%s:%d%s", s_bridge_host, s_bridge_port, path);
     http_response_capture_t capture = {
         .data = response,
         .capacity = response_len,
@@ -1041,7 +1317,7 @@ static esp_err_t http_post_binary(const char *path, const uint8_t *body, size_t 
                                   char *response, int response_len)
 {
     char url[192];
-    snprintf(url, sizeof(url), "http://%s:%d%s", VIBE_STICK_BRIDGE_HOST, VIBE_STICK_BRIDGE_PORT, path);
+    snprintf(url, sizeof(url), "http://%s:%d%s", s_bridge_host, s_bridge_port, path);
     http_response_capture_t capture = {
         .data = response,
         .capacity = response_len,
@@ -1554,7 +1830,7 @@ static void button_single_click_cb(void *button_handle, void *usr_data)
     (void)button_handle;
     (void)usr_data;
     note_user_activity();
-    queue_event(VIBE_STICK_EVENT_SHORT_PRESS);
+    queue_event(s_bridge_picker_visible ? VIBE_STICK_EVENT_BRIDGE_SELECT : VIBE_STICK_EVENT_SHORT_PRESS);
 }
 
 static void button_double_click_cb(void *button_handle, void *usr_data)
@@ -1562,6 +1838,10 @@ static void button_double_click_cb(void *button_handle, void *usr_data)
     (void)button_handle;
     (void)usr_data;
     note_user_activity();
+    if (s_bridge_picker_visible) {
+        queue_event(VIBE_STICK_EVENT_BRIDGE_SELECT);
+        return;
+    }
     queue_event(VIBE_STICK_EVENT_DOUBLE_CLICK);
 }
 
@@ -1570,7 +1850,15 @@ static void side_button_single_click_cb(void *button_handle, void *usr_data)
     (void)button_handle;
     (void)usr_data;
     note_user_activity();
-    queue_event(VIBE_STICK_EVENT_PROVIDER_NEXT);
+    queue_event(s_bridge_picker_visible ? VIBE_STICK_EVENT_BRIDGE_NEXT : VIBE_STICK_EVENT_PROVIDER_NEXT);
+}
+
+static void side_button_long_start_cb(void *button_handle, void *usr_data)
+{
+    (void)button_handle;
+    (void)usr_data;
+    note_user_activity();
+    queue_event(VIBE_STICK_EVENT_BRIDGE_SCAN);
 }
 
 static void button_long_start_cb(void *button_handle, void *usr_data)
@@ -1578,6 +1866,10 @@ static void button_long_start_cb(void *button_handle, void *usr_data)
     (void)button_handle;
     (void)usr_data;
     note_user_activity();
+    if (s_bridge_picker_visible) {
+        queue_event(VIBE_STICK_EVENT_BRIDGE_SELECT);
+        return;
+    }
     s_long_press_active = true;
     queue_event(VIBE_STICK_EVENT_LONG_START);
 }
@@ -1627,6 +1919,9 @@ static esp_err_t init_button(void)
     ESP_RETURN_ON_ERROR(iot_button_register_cb(side_button, BUTTON_SINGLE_CLICK, NULL,
                                                side_button_single_click_cb, NULL),
                         TAG, "side button single");
+    ESP_RETURN_ON_ERROR(iot_button_register_cb(side_button, BUTTON_LONG_PRESS_START, &long_press_args,
+                                               side_button_long_start_cb, NULL),
+                        TAG, "side button long");
     return ESP_OK;
 }
 
@@ -1665,6 +1960,15 @@ static void app_task(void *arg)
         case VIBE_STICK_EVENT_PROVIDER_NEXT:
             switch_provider();
             break;
+        case VIBE_STICK_EVENT_BRIDGE_SCAN:
+            start_bridge_scan();
+            break;
+        case VIBE_STICK_EVENT_BRIDGE_NEXT:
+            bridge_picker_next();
+            break;
+        case VIBE_STICK_EVENT_BRIDGE_SELECT:
+            bridge_picker_select();
+            break;
         }
     }
 }
@@ -1681,6 +1985,7 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs);
     }
 
+    load_bridge_target();
     ESP_ERROR_CHECK_WITHOUT_ABORT(vibe_board_init_power());
     s_event_queue = xQueueCreate(10, sizeof(agent_event_t));
     s_lvgl_lock = xSemaphoreCreateMutex();

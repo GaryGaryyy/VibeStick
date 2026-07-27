@@ -20,6 +20,7 @@ QUOTA_PATH = APP_SUPPORT_DIR / "quota.json"
 CLAUDE_QUOTA_PATH = APP_SUPPORT_DIR / "claude-quota.json"
 RECORDING_PATH = APP_SUPPORT_DIR / "recording.json"
 HUD_STATE_PATH = APP_SUPPORT_DIR / "hud-state.json"
+PAIRED_TOKEN_PATH = APP_SUPPORT_DIR / "paired-token.txt"
 RECORDINGS_DIR = APP_SUPPORT_DIR / "Recordings"
 
 

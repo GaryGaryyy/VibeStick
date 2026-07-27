@@ -119,6 +119,12 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 Stable firmware still talks to the bridge host compiled into firmware. Runtime state, alerts, recording transcription, and paste injection use Wi-Fi.
 
+### Multiple Computers
+
+When several computers on the same LAN are running VibeStick Bridge, long-press the StickS3 side button to search. Short-press the side button to move down the list, then press the front blue button to select a computer. The StickS3 saves the selected bridge host and keeps using Wi-Fi for all runtime traffic.
+
+Discovery uses UDP port `8766`; the bridge replies with the computer name and HTTP port. The StickS3 includes its bridge token in the discovery packet, so a bridge without a local token can remember it. On Windows, allow Python/VibeStick Bridge through the firewall if discovery does not find the PC.
+
 For development without installing LaunchAgents, run `./scripts/dev.sh` from the repository root instead of `./scripts/install.sh`.
 
 ## Troubleshooting

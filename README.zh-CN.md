@@ -117,6 +117,12 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 稳定固件仍然连接烧录时写入的 bridge host。运行时状态、提醒、录音转写和粘贴都走 Wi-Fi。
 
+### 多电脑切换
+
+如果同一局域网里有多台电脑运行 VibeStick Bridge，长按 StickS3 右侧键进入搜索。短按右侧键向下选择，按正面蓝键确认连接这台电脑。StickS3 会保存选中的 bridge host，之后运行时通信仍全部走 Wi-Fi。
+
+搜索使用 UDP `8766` 端口；电脑端返回电脑名和 HTTP 端口。StickS3 会在搜索包里带上 bridge token，所以没有本地 token 的 bridge 可以直接记住它。Windows 如果搜不到，通常需要在防火墙里允许 Python/VibeStick Bridge 入站。
+
 开发调试时可以用 `./scripts/dev.sh` 替代 `./scripts/install.sh`，它会在当前终端里运行 bridge。
 
 ## 常见问题排查

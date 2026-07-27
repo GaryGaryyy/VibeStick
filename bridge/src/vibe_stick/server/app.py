@@ -21,7 +21,14 @@ from vibe_stick.claude.usage import fetch_usage as fetch_claude_usage
 from vibe_stick.claude.usage import to_quota_snapshot as claude_usage_to_quota
 from vibe_stick.codex.quota import QuotaSnapshot, load_quota, save_quota
 from vibe_stick.config.dotenv import load_dotenv_files
-from vibe_stick.config.paths import CLAUDE_QUOTA_PATH, QUOTA_PATH, RECORDING_PATH, STATE_PATH, ensure_app_support
+from vibe_stick.config.paths import (
+    CLAUDE_QUOTA_PATH,
+    PAIRED_TOKEN_PATH,
+    QUOTA_PATH,
+    RECORDING_PATH,
+    STATE_PATH,
+    ensure_app_support,
+)
 from vibe_stick.desktop.hud import hide_hud
 from vibe_stick.paste.input_injector import make_paste_injector
 from vibe_stick.protocol.state import (
@@ -45,6 +52,8 @@ BRIDGE_NAME = "vibestick-bridge"
 DEFAULT_MAX_RECORDING_AUDIO_BYTES = 2_000_000
 DEFAULT_CLAUDE_USAGE_INTERVAL_SECONDS = 300
 MIN_CLAUDE_USAGE_INTERVAL_SECONDS = 30
+DISCOVERY_PORT = 8766
+DISCOVERY_PACKET_BYTES = 2048
 PLACEHOLDER_BRIDGE_TOKENS = {
     "change-this-shared-token",
     "paste-generated-token-here",
@@ -415,9 +424,10 @@ def run_server(host: str, port: int) -> None:
     _enforce_bind_security(host)
     store = BridgeStateStore()
     server = ThreadingHTTPServer((host, port), make_handler(store))
+    _start_discovery_server(port)
     if not _bridge_token():
         print(
-            "WARNING: VIBE_STICK_BRIDGE_TOKEN is not set; POST endpoints are unauthenticated on loopback only.",
+            "WARNING: VIBE_STICK_BRIDGE_TOKEN is not set; POST endpoints are unauthenticated until discovery pairing.",
             flush=True,
         )
     print(f"VibeStick Bridge listening on http://{host}:{port}", flush=True)
@@ -435,6 +445,10 @@ def _protected_paths() -> set[str]:
 
 
 def _bridge_token() -> str:
+    return _configured_bridge_token() or _paired_bridge_token()
+
+
+def _configured_bridge_token() -> str:
     token = os.environ.get("VIBE_STICK_BRIDGE_TOKEN", "").strip()
     if token.lower() in PLACEHOLDER_BRIDGE_TOKENS:
         return ""
@@ -443,10 +457,77 @@ def _bridge_token() -> str:
 
 def _enforce_bind_security(host: str) -> None:
     if _host_requires_token(host) and not _bridge_token():
-        raise SystemExit(
-            "Refusing to bind VibeStick Bridge outside loopback without "
-            "VIBE_STICK_BRIDGE_TOKEN. Set a strong shared token or use --host 127.0.0.1."
-        )
+        print("WARNING: VibeStick Bridge is binding outside loopback without a token.", flush=True)
+
+
+def _paired_bridge_token() -> str:
+    try:
+        token = PAIRED_TOKEN_PATH.read_text().strip()
+    except OSError:
+        return ""
+    return "" if token.lower() in PLACEHOLDER_BRIDGE_TOKENS else token
+
+
+def _remember_pairing_token(token: str) -> None:
+    token = token.strip()
+    if not token or token.lower() in PLACEHOLDER_BRIDGE_TOKENS:
+        return
+    if _configured_bridge_token():
+        return
+    try:
+        PAIRED_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PAIRED_TOKEN_PATH.write_text(token + "\n")
+    except OSError as exc:
+        print(f"discovery token save failed: {exc}", flush=True)
+
+
+def _start_discovery_server(http_port: int) -> None:
+    thread = threading.Thread(
+        target=_serve_discovery,
+        args=(http_port,),
+        name="vibestick-discovery",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _serve_discovery(http_port: int) -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("", DISCOVERY_PORT))
+    except OSError as exc:
+        print(f"VibeStick discovery disabled: {exc}", flush=True)
+        sock.close()
+        return
+
+    print(f"VibeStick discovery listening on udp://0.0.0.0:{DISCOVERY_PORT}", flush=True)
+    while True:
+        try:
+            data, address = sock.recvfrom(DISCOVERY_PACKET_BYTES)
+            response = _discovery_response(data, http_port)
+            if response:
+                sock.sendto(response, address)
+        except OSError as exc:
+            print(f"VibeStick discovery error: {exc}", flush=True)
+            time.sleep(1)
+
+
+def _discovery_response(data: bytes, http_port: int) -> bytes | None:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "vibestick_discover":
+        return None
+    _remember_pairing_token(str(payload.get("token") or ""))
+    response = {
+        "type": "vibestick_bridge",
+        "name": _computer_name(),
+        "port": http_port,
+        "version": BRIDGE_VERSION,
+    }
+    return json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def _host_requires_token(host: str) -> bool:

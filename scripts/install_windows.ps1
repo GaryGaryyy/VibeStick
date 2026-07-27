@@ -4,10 +4,14 @@ $BridgeDir = Join-Path $RootDir "bridge"
 $ConfigDir = Join-Path $env:APPDATA "VibeStick"
 $VenvDir = Join-Path $ConfigDir ".venv"
 $BridgeRunnerPath = Join-Path $ConfigDir "run-vibestick-wifi-bridge.cmd"
+$ConfigEnvPath = Join-Path $ConfigDir ".env"
+$ExampleEnvPath = Join-Path $RootDir ".env.example"
 
 New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 if (Test-Path (Join-Path $RootDir ".env")) {
-    Copy-Item (Join-Path $RootDir ".env") (Join-Path $ConfigDir ".env") -Force
+    Copy-Item (Join-Path $RootDir ".env") $ConfigEnvPath -Force
+} elseif (-not (Test-Path $ConfigEnvPath) -and (Test-Path $ExampleEnvPath)) {
+    Copy-Item $ExampleEnvPath $ConfigEnvPath
 }
 
 if (-not (Test-Path $VenvDir)) {
@@ -28,5 +32,8 @@ Write-Host "VibeStick Windows config directory:"
 Write-Host $ConfigDir
 Write-Host "Wi-Fi bridge runner:"
 Write-Host $BridgeRunnerPath
+Write-Host "Configuration file:"
+Write-Host $ConfigEnvPath
+Write-Host "Fill VIBE_STICK_ASR_API_KEY in that file before voice transcription."
 Write-Host "Run the Wi-Fi bridge runner on Windows. On the StickS3, long-press the side button to discover this PC, then select it with the blue button."
 Write-Host "If Windows Firewall prompts, allow Python on private networks so TCP 8765 and UDP 8766 can receive LAN traffic."

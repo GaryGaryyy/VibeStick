@@ -274,6 +274,7 @@ static const lv_point_precise_t s_battery_bolt_points[] = {
 
 static void render_state(void);
 static void poll_state(void);
+static void sanitize_ascii_text(char *text, size_t text_len, const char *fallback);
 
 static void queue_event(agent_event_type_t type)
 {
@@ -873,16 +874,16 @@ static void create_ui(void)
     lv_obj_set_style_border_width(s_bridge_picker_overlay, 0, 0);
     lv_obj_add_flag(s_bridge_picker_overlay, LV_OBJ_FLAG_HIDDEN);
 
-    s_bridge_picker_title = make_label(s_bridge_picker_overlay, "选择电脑", FONT_CN,
+    s_bridge_picker_title = make_label(s_bridge_picker_overlay, "COMPUTERS", &lv_font_montserrat_14,
                                        lv_color_hex(0x8a9099), 120, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_bridge_picker_title, LV_ALIGN_TOP_MID, 0, 28);
-    s_bridge_picker_name = make_wrap_label(s_bridge_picker_overlay, "搜索中", FONT_CN,
+    s_bridge_picker_name = make_wrap_label(s_bridge_picker_overlay, "SEARCHING", &lv_font_montserrat_14,
                                            lv_color_hex(0xf3f4f6), 118, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_bridge_picker_name, LV_ALIGN_CENTER, 0, -18);
     s_bridge_picker_host = make_label(s_bridge_picker_overlay, "", &lv_font_montserrat_12,
                                       lv_color_hex(0x9aa0aa), 120, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_bridge_picker_host, LV_ALIGN_CENTER, 0, 26);
-    s_bridge_picker_hint = make_label(s_bridge_picker_overlay, "右键下移  蓝键确定", FONT_CN,
+    s_bridge_picker_hint = make_label(s_bridge_picker_overlay, "SIDE: NEXT  BLUE: OK", &lv_font_montserrat_10,
                                       lv_color_hex(0x8b9098), 130, LV_TEXT_ALIGN_CENTER);
     lv_obj_align(s_bridge_picker_hint, LV_ALIGN_BOTTOM_MID, 0, -18);
 }
@@ -1018,7 +1019,7 @@ static void render_bridge_picker(const char *name, const char *host, const char 
 static void render_current_bridge_candidate(void)
 {
     if (s_bridge_candidate_count <= 0) {
-        render_bridge_picker("未找到电脑", "", "右键重搜");
+        render_bridge_picker("NO COMPUTER", "", "SIDE: RETRY");
         return;
     }
     if (s_bridge_candidate_index < 0 || s_bridge_candidate_index >= s_bridge_candidate_count) {
@@ -1029,7 +1030,7 @@ static void render_current_bridge_candidate(void)
     snprintf(host_text, sizeof(host_text), "%s:%d  %d/%d",
              candidate->host, candidate->port,
              s_bridge_candidate_index + 1, s_bridge_candidate_count);
-    render_bridge_picker(candidate->name, host_text, "右键下移  蓝键确定");
+    render_bridge_picker(candidate->name, host_text, "SIDE: NEXT  BLUE: OK");
 }
 
 static bool bridge_candidate_exists(const char *host, int port)
@@ -1054,6 +1055,7 @@ static void add_bridge_candidate(const char *name, const char *host, int port)
     bridge_candidate_t *candidate = &s_bridge_candidates[s_bridge_candidate_count++];
     strlcpy(candidate->host, host, sizeof(candidate->host));
     strlcpy(candidate->name, (name && name[0] != '\0') ? name : host, sizeof(candidate->name));
+    sanitize_ascii_text(candidate->name, sizeof(candidate->name), candidate->host);
     candidate->port = port;
 }
 
@@ -1133,12 +1135,12 @@ static void discover_bridges(void)
 static void start_bridge_scan(void)
 {
     if (!s_wifi_connected || s_recording_overlay_visible || vibe_audio_is_recording()) {
-        render_bridge_picker("WiFi未连接", "", "稍后重试");
+        render_bridge_picker("WIFI OFF", "", "TRY AGAIN");
         show_bridge_picker(true);
         return;
     }
     show_bridge_picker(true);
-    render_bridge_picker("搜索中", "", "请稍候");
+    render_bridge_picker("SEARCHING", "", "PLEASE WAIT");
     discover_bridges();
     render_current_bridge_candidate();
 }
@@ -1309,7 +1311,17 @@ static esp_err_t http_request_timeout(const char *method, const char *path, cons
     }
     esp_err_t err = esp_http_client_perform(client);
     int status_code = esp_http_client_get_status_code(client);
-    if (err == ESP_OK && response && response_len > 0 && capture.used == 0) {
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "http %s %s transport failed: %s", method, path, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return err;
+    }
+    if (status_code < 200 || status_code >= 300) {
+        ESP_LOGW(TAG, "http %s %s status=%d", method, path, status_code);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+    if (response && response_len > 0 && capture.used == 0) {
         ESP_LOGW(TAG, "http %s %s status=%d empty response", method, path, status_code);
     }
     esp_http_client_cleanup(client);
@@ -1354,7 +1366,17 @@ static esp_err_t http_post_binary(const char *path, const uint8_t *body, size_t 
     esp_http_client_set_post_field(client, (const char *)body, body_len);
     esp_err_t err = esp_http_client_perform(client);
     int status_code = esp_http_client_get_status_code(client);
-    if (err == ESP_OK && response && response_len > 0 && capture.used == 0) {
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "http POST %s transport failed: %s", path, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return err;
+    }
+    if (status_code < 200 || status_code >= 300) {
+        ESP_LOGW(TAG, "http POST %s status=%d", path, status_code);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+    if (response && response_len > 0 && capture.used == 0) {
         ESP_LOGW(TAG, "http POST %s status=%d empty response", path, status_code);
     }
     esp_http_client_cleanup(client);
@@ -1703,18 +1725,24 @@ static void handle_recording_start(void)
     generate_recording_session_id(s_recording_session_id, sizeof(s_recording_session_id));
     if (s_recording_session_id[0] == '\0') {
         ESP_LOGW(TAG, "recording start failed: no session id");
+        show_recording_overlay("MIC ERROR", "NO SESSION", true);
         (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
+        vTaskDelay(pdMS_TO_TICKS(900));
+        show_recording_overlay(NULL, NULL, false);
         return;
     }
 
+    show_recording_overlay("正在聆听", "松开发送", true);
     esp_err_t audio_err = vibe_audio_start();
     if (audio_err != ESP_OK) {
         ESP_LOGW(TAG, "hardware recording start failed: %s", esp_err_to_name(audio_err));
         s_recording_session_id[0] = '\0';
+        show_recording_overlay("MIC ERROR", "CHECK MIC", true);
         (void)vibe_audio_play_sound(VIBE_STICK_SOUND_ERROR);
+        vTaskDelay(pdMS_TO_TICKS(900));
+        show_recording_overlay(NULL, NULL, false);
         return;
     }
-    show_recording_overlay("正在聆听", "松开发送", true);
 
     char body[192];
     snprintf(body, sizeof(body),
@@ -1775,7 +1803,7 @@ static void handle_recording_stop(void)
             render_state();
         }
     }
-    if (!upload_ok || err != ESP_OK || recording_failed) {
+    if (audio_err != ESP_OK || !upload_ok || err != ESP_OK || recording_failed) {
         ESP_LOGW(TAG, "recording stop bridge request failed: %s", esp_err_to_name(err));
         const char *title = (strcmp(recording_status, "audio_skipped") == 0 ||
                              strcmp(recording_status, "transcript_rejected") == 0)

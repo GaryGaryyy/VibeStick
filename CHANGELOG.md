@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.6
+
+- Search picker uses a complete ASCII font and sanitizes discovered computer names so names and host details remain visible on StickS3.
+- Firmware treats non-2xx bridge responses as failures instead of accepting error JSON as state.
+- Recording start failures are shown on StickS3, and audio stop failures now trigger the configured error alert.
+- Windows installer registers a hidden per-user Scheduled Task, starts the bridge immediately, and keeps the command runner as a manual fallback.
+- Windows installer also starts a no-console recording overlay that appears only while the StickS3 is recording or transcribing.
+- Windows documentation now states that recording uses the StickS3 microphone over Wi-Fi and that the Windows `.env` needs its own ASR configuration.
+
 ## v0.1.5
 
 - Stable StickS3 home screen update: dimmer backlight, 5-second idle backlight sleep, 160 MHz CPU default, and a computer-name panel instead of 5H / 7D quota bars.

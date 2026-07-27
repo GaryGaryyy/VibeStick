@@ -109,13 +109,18 @@ If Codex works but the Claude column shows `--%`, that is expected: Claude usage
 
 ### Optional Windows Wi-Fi Bridge
 
-To run the bridge on a Windows computer, install the Windows bridge on that PC and start the Wi-Fi bridge:
+To run the bridge on a Windows computer, install the Windows bridge on that PC:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\install_windows.ps1
-& "$env:APPDATA\VibeStick\run-vibestick-wifi-bridge.cmd"
 ```
+
+The installer creates hidden per-user Scheduled Tasks for the bridge and a temporary recording overlay, then starts them immediately, so no console window needs to remain open. The overlay appears only while the StickS3 is recording or transcribing. The generated command runner at `%APPDATA%\VibeStick\run-vibestick-wifi-bridge.cmd` remains available for manual diagnostics.
+
+Open `%APPDATA%\VibeStick\.env` and fill `VIBE_STICK_ASR_API_KEY` (and the matching ASR provider/base URL/model) before voice transcription. Do not copy the Mac `.env` blindly if it contains Mac-only settings. The Windows bridge receives microphone PCM from the StickS3 over Wi-Fi; it does not need to open a Windows microphone. The bridge handles transcription and pastes into the currently focused Windows application.
+
+The StickS3 status dot reports the local agent (Codex/Claude), not bridge reachability. If the bridge is reachable but no supported agent process is running on Windows, the dot correctly shows `OFFLINE`; the computer name and Wi-Fi connection can still be displayed.
 
 The firmware starts with the bridge host compiled into it, then can discover and save another bridge on the same LAN. Runtime state, alerts, recording transcription, and paste injection use Wi-Fi.
 

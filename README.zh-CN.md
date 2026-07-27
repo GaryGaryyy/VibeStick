@@ -107,13 +107,18 @@ ls /dev/cu.*
 
 ### 可选：Windows Wi-Fi bridge
 
-如果要在 Windows 电脑上运行 bridge，在 Windows 上安装并启动 Wi-Fi bridge：
+如果要在 Windows 电脑上运行 bridge，在 Windows 上安装 bridge：
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\install_windows.ps1
-& "$env:APPDATA\VibeStick\run-vibestick-wifi-bridge.cmd"
 ```
+
+安装脚本会创建 bridge 和录音提示层两个当前用户的隐藏任务计划并立即启动，所以不需要一直挂着黑色窗口。录音或识别期间才会出现临时提示层，平时完全后台运行。生成的 `%APPDATA%\VibeStick\run-vibestick-wifi-bridge.cmd` 仍然保留，用于手动诊断。
+
+语音转写前，打开 `%APPDATA%\VibeStick\.env`，填写 `VIBE_STICK_ASR_API_KEY`，以及对应的 ASR provider、base URL 和 model。不要直接把包含 Mac 专用配置的 `.env` 复制过来。Windows bridge 接收的是 S3 通过 Wi-Fi 上传的麦克风 PCM，不需要打开 Windows 麦克风；bridge 负责转写，再把结果粘贴到当前获得焦点的 Windows 程序。
+
+S3 上的状态点表示本机 Codex/Claude 是否运行，不表示 bridge 是否在线。如果 bridge 已连接但 Windows 没有受支持的 agent 进程，状态点显示 `OFFLINE` 是正常的；电脑名称和 Wi-Fi 仍然可以正常显示。
 
 固件首次使用烧录时写入的 bridge host，之后可以搜索并保存同一局域网里的其他 bridge。运行时状态、提醒、录音转写和粘贴都走 Wi-Fi。
 

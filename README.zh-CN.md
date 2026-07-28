@@ -10,6 +10,8 @@ VibeStick 把 M5Stack StickS3 变成一个桌面 AI agent 小终端：显示状�
 
 VibeStick 面向 M5Stack StickS3，不是 M5Stack 官方项目。Codex、Claude 等第三方 agent 名称只用于说明本地兼容工具和集成。
 
+完整的刷入、使用、Windows 后台安装、多电脑切换和排障步骤见：[中文使用、刷入与排障指南](docs/USAGE.zh-CN.md)。
+
 ## 开始前的准备
 
 - [ ] M5 StickS3｜一根 USB-C 数据线｜一台电脑（Mac；可选 Windows 电脑运行 Wi-Fi bridge）
@@ -289,7 +291,7 @@ idf.py build
 - 这是整理后的原型，不是打包好的 Mac app 或 DMG。
 - 固件只面向 M5Stack StickS3。
 - 当前稳定首页优先显示 provider 状态和电脑名称；5H/7D 额度仍保留在 bridge 状态里，但暂不显示在屏幕上。
-- 屏幕亮度比之前更低，空闲 5 秒后关闭背光，固件默认 CPU 频率降为 160 MHz。
+- 屏幕亮度比之前更低，空闲 5 秒后关闭背光，固件默认 CPU 频率为 80 MHz。
 - Windows 支持目前是脚本形式，需要 Python 3.11+；不是签名安装包。
 - Codex quota 来自本地 Codex session JSONL 里的 `rate_limits`，不是官方 quota API。
 - Claude usage 来自未公开的 Claude Code OAuth endpoint，默认关闭。

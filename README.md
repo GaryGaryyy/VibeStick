@@ -10,6 +10,8 @@ VibeStick turns an M5Stack StickS3 into a tiny desktop companion for coding agen
 
 VibeStick targets M5Stack StickS3 hardware and is not an official M5Stack project. Third-party agent names such as Codex and Claude describe compatible local tools and integrations only.
 
+For the complete flashing, usage, Windows background installation, multi-computer switching, and troubleshooting steps, see the [Chinese usage and flashing guide](docs/USAGE.zh-CN.md).
+
 ## What you'll need (prepare first)
 
 - [ ] M5Stack StickS3 and a USB-C data cable.
@@ -291,7 +293,7 @@ idf.py build
 - This is a cleaned prototype, not a packaged Mac app or DMG.
 - The firmware targets M5Stack StickS3 only.
 - The home screen prioritizes provider status and computer name; 5H/7D quota values are still available in bridge state but are not shown on the current stable UI.
-- The screen is dimmer than before, the backlight turns off after 5 seconds of idle time, and the firmware defaults to a 160 MHz CPU clock.
+- The screen is dimmer than before, the backlight turns off after 5 seconds of idle time, and the firmware defaults to an 80 MHz CPU clock.
 - Windows support is script-based and needs Python 3.11+. The generated runner is not a signed Windows app.
 - Codex quota is inferred from local Codex session JSONL events with `rate_limits`; it is not an official quota API.
 - Claude usage comes from an undocumented Claude Code OAuth endpoint and is disabled by default.

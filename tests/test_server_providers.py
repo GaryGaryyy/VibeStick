@@ -57,6 +57,16 @@ class ServerProviderTests(unittest.TestCase):
 
         self.assertEqual(selected, "claude")
 
+    def test_select_active_provider_prefers_recent_status_without_live_process(self) -> None:
+        selected = app._select_active_provider(
+            "auto",
+            "claude",
+            self._obs("codex", online=False, status=AgentStatus.DONE),
+            self._obs("claude", online=False),
+        )
+
+        self.assertEqual(selected, "codex")
+
     def test_select_alert_observation_uses_non_active_provider_alert(self) -> None:
         active = self._obs("claude")
         codex = self._obs(

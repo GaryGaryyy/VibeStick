@@ -647,11 +647,13 @@ def _select_active_provider(
     if configured in {"codex", "claude"}:
         return configured
 
-    if codex_observation.online and not claude_observation.online:
+    codex_active = _observation_is_active(codex_observation)
+    claude_active = _observation_is_active(claude_observation)
+    if codex_active and not claude_active:
         return "codex"
-    if claude_observation.online and not codex_observation.online:
+    if claude_active and not codex_active:
         return "claude"
-    if codex_observation.online and claude_observation.online:
+    if codex_active and claude_active:
         codex_time = codex_observation.latest_event_timestamp
         claude_time = claude_observation.latest_event_timestamp
         if codex_time is not None and claude_time is not None:
@@ -663,6 +665,15 @@ def _select_active_provider(
         return last_active if last_active in {"codex", "claude"} else "codex"
 
     return last_active if last_active in {"codex", "claude"} else "codex"
+
+
+def _observation_is_active(observation: ProviderObservation) -> bool:
+    return observation.online or observation.status in {
+        AgentStatus.RUNNING,
+        AgentStatus.DONE,
+        AgentStatus.APPROVAL,
+        AgentStatus.ERROR,
+    }
 
 
 def _select_alert_observation(

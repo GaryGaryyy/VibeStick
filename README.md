@@ -130,6 +130,8 @@ The StickS3 status dot reports the local agent (Codex/Claude), not bridge reacha
 
 Cancelled, interrupted, crashed, or unexpectedly stopped agent tasks are reported as errors and trigger the StickS3 error alert sound.
 
+On Windows, the bridge observes Codex/ChatGPT/Claude process names and local session logs; a task that finishes or fails just before its agent process exits still keeps its recent status and alert.
+
 The firmware starts with the bridge host compiled into it, then can discover and save another bridge on the same LAN. Runtime state, alerts, recording transcription, and paste injection use Wi-Fi.
 
 ### Multiple Computers

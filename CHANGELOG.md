@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.12
+
+- Improve Windows Codex/ChatGPT/Claude detection and preserve recent task status and alert events even when an agent process exits before the next poll.
+
 ## v0.1.11
 
 - A single `VIBE_STICK_ASR_API_KEY` now enables the default SiliconFlow ASR provider; the URL, model, and language are filled automatically for background Windows tasks.

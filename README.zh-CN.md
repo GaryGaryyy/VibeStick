@@ -128,6 +128,8 @@ S3 上的状态点表示本机 Codex/Claude 是否运行，不表示 bridge 是�
 
 如果任务被取消、中止、崩溃，或 agent 在运行任务时异常退出，bridge 会把状态标记为错误，S3 会播放错误提示音。
 
+Windows bridge 会读取 Codex/ChatGPT/Claude 的 Windows 进程名和本地 session 日志；任务刚完成或失败、进程随即退出时，最近的状态仍会保留并触发提醒。
+
 固件首次使用烧录时写入的 bridge host，之后可以搜索并保存同一局域网里的其他 bridge。运行时状态、提醒、录音转写和粘贴都走 Wi-Fi。
 
 ### 多电脑切换

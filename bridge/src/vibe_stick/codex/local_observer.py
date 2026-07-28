@@ -74,14 +74,14 @@ def observe_codex(project_root: Path) -> LocalCodexObservation:
                     latest_alert = (timestamp, alert_status, alert_kind, message)
 
     quota_snapshot = latest_quota[1] if latest_quota else None
-    if not codex_online:
-        status = AgentStatus.OFFLINE
-    elif latest_alert and now - latest_alert[0] <= ALERT_ACTIVITY_WINDOW:
+    if latest_alert and now - latest_alert[0] <= ALERT_ACTIVITY_WINDOW:
         status = latest_alert[1]
     elif latest_event and now - latest_event[0] <= RUNNING_ACTIVITY_WINDOW:
         status = AgentStatus.RUNNING
-    else:
+    elif codex_online:
         status = AgentStatus.IDLE
+    else:
+        status = AgentStatus.OFFLINE
 
     observation = LocalCodexObservation(
         status=status,
@@ -226,7 +226,7 @@ def _windows_codex_process_running() -> bool:
         "-Command",
         "Get-CimInstance Win32_Process | "
         "Where-Object { $_.Name -match '^(codex|ChatGPT)\\.exe$' -or $_.CommandLine -match 'codex' } | "
-        "ForEach-Object { $_.CommandLine }",
+        "ForEach-Object { \"$($_.Name)|$($_.CommandLine)\" }",
     ]
     try:
         result = subprocess.run(
@@ -246,6 +246,11 @@ def _windows_codex_process_running() -> bool:
 
 def _command_is_codex_process(command: str) -> bool:
     lower = command.lower()
+    if "|" in lower:
+        process_name, command_line = lower.split("|", 1)
+        if process_name.strip() in {"codex.exe", "chatgpt.exe"}:
+            return True
+        lower = command_line.strip()
     if "/applications/codex.app/" in lower:
         return True
     if re.search(r"\\codex(\.exe)?(\s|$)", lower) and _has_app_server_arg(lower):

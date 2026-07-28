@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import platform
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from vibe_stick.desktop.process import hidden_subprocess_kwargs
 from vibe_stick.protocol.state import AgentStatus
 from vibe_stick.providers._jsonl import session_files, tail_json_events
 from vibe_stick.providers.base import ProviderObservation
@@ -83,9 +86,7 @@ def observe_claude(project_root: Path) -> ProviderObservation:
     alert_type = "NONE"
     alert_message = ""
     alert_event_id = ""
-    if not online:
-        status = AgentStatus.OFFLINE
-    elif latest_error and _is_latest(latest_error[0]) and now - latest_error[0] <= ALERT_ACTIVITY_WINDOW:
+    if latest_error and _is_latest(latest_error[0]) and now - latest_error[0] <= ALERT_ACTIVITY_WINDOW:
         status = AgentStatus.ERROR
         alert_type = "ERROR"
         alert_event_id = latest_error[1]
@@ -102,6 +103,10 @@ def observe_claude(project_root: Path) -> ProviderObservation:
         alert_message = latest_done[2]
     elif latest_event and now - latest_event[0] <= RUNNING_ACTIVITY_WINDOW:
         status = AgentStatus.RUNNING
+    elif online:
+        status = AgentStatus.IDLE
+    else:
+        status = AgentStatus.OFFLINE
 
     return ProviderObservation(
         provider_id="claude",
@@ -120,6 +125,8 @@ def observe_claude(project_root: Path) -> ProviderObservation:
 
 
 def _claude_process_running() -> bool:
+    if platform.system() == "Windows":
+        return _windows_claude_process_running()
     try:
         result = subprocess.run(
             ["ps", "-axo", "command="],
@@ -143,6 +150,42 @@ def _claude_process_running() -> bool:
         if executable == "claude":
             return True
     return False
+
+
+def _windows_claude_process_running() -> bool:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -match '^(claude|claude-code)\\.exe$' -or "
+        "$_.CommandLine -match '(?i)claude(-code)?' } | "
+        "ForEach-Object { \"$($_.Name)|$($_.CommandLine)\" }",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            **hidden_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    return any(_command_is_claude_process(line) for line in result.stdout.splitlines())
+
+
+def _command_is_claude_process(command: str) -> bool:
+    lower = command.strip().lower()
+    if "|" in lower:
+        process_name, command_line = lower.split("|", 1)
+        if process_name.strip() in {"claude.exe", "claude-code.exe"}:
+            return True
+        lower = command_line.strip()
+    return bool(re.search(r"(^|[\\/\s])claude(?:-code)?(?:\.exe)?(?:[\"\s]|$)", lower))
 
 
 def _error_message(event: dict[str, Any]) -> str | None:

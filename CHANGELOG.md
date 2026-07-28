@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.11
+
+- A single `VIBE_STICK_ASR_API_KEY` now enables the default SiliconFlow ASR provider; the URL, model, and language are filled automatically for background Windows tasks.
+
 ## v0.1.10
 
 - Hide Windows PowerShell helper processes so the bridge does not flash a console window during state polling or paste injection.

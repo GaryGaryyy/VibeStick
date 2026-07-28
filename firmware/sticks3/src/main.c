@@ -148,6 +148,7 @@ typedef struct {
 static QueueHandle_t s_event_queue;
 static SemaphoreHandle_t s_lvgl_lock;
 static bool s_wifi_connected;
+static bool s_bridge_online;
 static bool s_recording_overlay_visible;
 static bool s_long_press_active;
 static char s_last_alert_event_id[56];
@@ -942,6 +943,11 @@ static void render_state(void)
     const bool q7_valid = implemented && display_state->quota_7d_valid;
     const bool quota_stale = implemented && display_state->quota_stale;
     const char *status_key = implemented ? display_state->status : "UNIMPLEMENTED";
+    const char *status_text = implemented ? status_text_for(display_state->status) : "待命";
+    if (s_bridge_online && implemented && strcmp(status_key, "OFFLINE") == 0) {
+        status_key = "IDLE";
+        status_text = status_text_for(status_key);
+    }
 
     lv_label_set_text(s_wifi_label, s_wifi_connected ? "WiFi" : "OFF");
     lv_obj_set_style_text_color(s_wifi_label,
@@ -956,7 +962,7 @@ static void render_state(void)
     }
     lv_label_set_text(s_provider_label, provider->display_name);
     lv_obj_set_style_text_color(s_provider_label, provider->implemented ? lv_color_hex(0xf3f4f6) : lv_color_hex(0xd7d9de), 0);
-    lv_label_set_text(s_status_label, implemented ? status_text_for(display_state->status) : "待命");
+    lv_label_set_text(s_status_label, status_text);
     set_status_color(provider, status_key);
     lv_label_set_text(s_computer_name_label, s_state.computer_name);
     set_quota_title(s_quota_5h_title_label, "5H", quota_stale);
@@ -1610,12 +1616,14 @@ static void poll_state(void)
     }
     esp_err_t err = bridge_request("GET", VIBE_STICK_STATE_PATH, NULL, response, sizeof(response));
     if (err != ESP_OK || response[0] == '\0' || !parse_state_json(response)) {
+        s_bridge_online = false;
         provider_display_state_t *display_state = current_provider_display_state();
         strlcpy(display_state->status, "OFFLINE", sizeof(display_state->status));
         s_state.wifi = s_wifi_connected;
         render_state();
         return;
     }
+    s_bridge_online = true;
     render_state();
     maybe_handle_alert();
 }
@@ -1826,6 +1834,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base,
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_wifi_connected = false;
+        s_bridge_online = false;
         esp_wifi_connect();
         render_state();
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {

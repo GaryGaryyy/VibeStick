@@ -5,6 +5,8 @@ import subprocess
 import time
 from dataclasses import dataclass
 
+from vibe_stick.desktop.process import hidden_subprocess_kwargs
+
 
 @dataclass
 class PasteResult:
@@ -149,6 +151,7 @@ class WindowsPasteInjector(PasteInjector):
                 capture_output=True,
                 text=True,
                 timeout=5,
+                **hidden_subprocess_kwargs(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             return PasteResult(False, f"Clipboard write failed: {exc}")

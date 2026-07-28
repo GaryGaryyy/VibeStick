@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from vibe_stick.codex.quota import QuotaSnapshot
+from vibe_stick.desktop.process import hidden_subprocess_kwargs
 from vibe_stick.protocol.state import AgentStatus
 from vibe_stick.providers._jsonl import session_files, tail_json_events
 
@@ -234,6 +235,7 @@ def _windows_codex_process_running() -> bool:
             capture_output=True,
             text=True,
             timeout=3,
+            **hidden_subprocess_kwargs(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

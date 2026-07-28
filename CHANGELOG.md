@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.10
+
+- Hide Windows PowerShell helper processes so the bridge does not flash a console window during state polling or paste injection.
+
 ## v0.1.9
 
 - Run the Windows bridge from `pythonw.exe` as a hidden per-user task, write background logs to `%APPDATA%\VibeStick\bridge.log`, restart it after an unexpected exit, and stop stale manual bridge processes during installation.

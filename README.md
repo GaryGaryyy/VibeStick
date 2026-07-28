@@ -122,6 +122,8 @@ Do not use the manual diagnostic window as the background service; closing that 
 
 If you previously started the bridge by double-clicking the `.cmd` file or running `python` directly, run the installer once more. It stops stale manual bridge processes, re-registers the hidden background task, and starts it; after installation, you can close PowerShell and all Python windows.
 
+PowerShell helpers used for Windows agent detection and paste injection run with hidden subprocess flags, so they do not flash a console window during state polling.
+
 Open `%APPDATA%\VibeStick\.env` and fill `VIBE_STICK_ASR_API_KEY` (and the matching ASR provider/base URL/model) before voice transcription. Do not copy the Mac `.env` blindly if it contains Mac-only settings. The Windows bridge receives microphone PCM from the StickS3 over Wi-Fi; it does not need to open a Windows microphone. The bridge handles transcription and pastes into the currently focused Windows application.
 
 The StickS3 status dot reports the local agent (Codex/Claude), not bridge reachability. If the bridge is reachable but no supported agent process is running on Windows, StickS3 shows `IDLE`; it shows `OFFLINE` only when the bridge or Wi-Fi is unreachable. The computer name and Wi-Fi connection can still be displayed.

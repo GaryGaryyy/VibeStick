@@ -15,7 +15,9 @@ from uuid import uuid4
 from vibe_stick.config.paths import APP_SUPPORT_DIR
 
 GROQ_ASR_BASE_URL = "https://api.groq.com/openai/v1"
+SILICONFLOW_ASR_BASE_URL = "https://api.siliconflow.cn/v1"
 DEFAULT_ASR_MODEL = "whisper-large-v3-turbo"
+DEFAULT_SILICONFLOW_ASR_MODEL = "FunAudioLLM/SenseVoiceSmall"
 DEFAULT_ASR_LANGUAGE = "zh"
 
 
@@ -195,7 +197,8 @@ def _config_from_generic_env() -> dict[str, str]:
         model = model or os.environ.get("VIBE_STICK_GROQ_MODEL", DEFAULT_ASR_MODEL).strip()
         language = language or os.environ.get("VIBE_STICK_GROQ_LANGUAGE", DEFAULT_ASR_LANGUAGE).strip()
     else:
-        model = model or DEFAULT_ASR_MODEL
+        base_url = base_url or SILICONFLOW_ASR_BASE_URL
+        model = model or DEFAULT_SILICONFLOW_ASR_MODEL
         language = language or DEFAULT_ASR_LANGUAGE
     return _asr_config(
         provider=provider,
@@ -221,7 +224,8 @@ def _config_from_toml(data: dict[str, Any]) -> dict[str, str]:
         model = str(data.get("groq_model") or model or DEFAULT_ASR_MODEL).strip()
         language = str(data.get("groq_language") or language or DEFAULT_ASR_LANGUAGE).strip()
     elif provider == "openai-compatible":
-        model = model or DEFAULT_ASR_MODEL
+        base_url = base_url or SILICONFLOW_ASR_BASE_URL
+        model = model or DEFAULT_SILICONFLOW_ASR_MODEL
         language = language or DEFAULT_ASR_LANGUAGE
     else:
         return {}

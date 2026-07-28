@@ -80,6 +80,17 @@ class TranscriberConfigTests(unittest.TestCase):
         self.assertEqual(config["api_key"], "env-key")
         self.assertEqual(config["base_url"], transcriber.GROQ_ASR_BASE_URL)
 
+    def test_openai_compatible_key_only_uses_siliconflow_defaults(self) -> None:
+        with mock.patch.dict(os.environ, {"VIBE_STICK_ASR_API_KEY": "env-key"}, clear=True):
+            with mock.patch.object(transcriber, "APP_SUPPORT_DIR", Path("/tmp/does-not-exist-vibestick")):
+                config = transcriber._load_asr_config()
+
+        self.assertEqual(config["provider"], "openai-compatible")
+        self.assertEqual(config["api_key"], "env-key")
+        self.assertEqual(config["base_url"], transcriber.SILICONFLOW_ASR_BASE_URL)
+        self.assertEqual(config["model"], transcriber.DEFAULT_SILICONFLOW_ASR_MODEL)
+        self.assertEqual(config["language"], "zh")
+
     def test_openai_compatible_toml_config_parses_fields(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

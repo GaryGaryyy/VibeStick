@@ -27,6 +27,11 @@ class ClaudeProcessDetectionTests(unittest.TestCase):
             self._run_with_ps_output("/Applications/Claude.app/Contents/MacOS/Claude\n")
         )
 
+    def test_detects_windows_claude_process(self) -> None:
+        completed = mock.Mock(returncode=0, stdout="claude.exe|C:\\Tools\\claude.exe\n")
+        with mock.patch.object(claude.subprocess, "run", return_value=completed):
+            self.assertTrue(claude._windows_claude_process_running())
+
     def test_does_not_match_unrelated_claude_named_tools(self) -> None:
         output = (
             "/Users/x/.nvm/versions/node/v24.12.0/bin/node "
@@ -72,6 +77,28 @@ class ClaudeProviderTests(unittest.TestCase):
         self.assertEqual(observation.alert_type, "ERROR")
         self.assertIn("limit", observation.alert_message)
 
+    def test_cancelled_turn_reports_error_alert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            projects = Path(tmp) / "projects"
+            self._write_event(
+                projects,
+                {
+                    "type": "system",
+                    "subtype": "cancelled",
+                    "timestamp": self._timestamp(minutes_ago=1),
+                    "sessionId": "s1",
+                    "message": "Task cancelled",
+                },
+            )
+            with mock.patch.object(claude, "PROJECTS_DIR", projects), mock.patch.object(
+                claude, "_claude_process_running", return_value=True
+            ):
+                observation = claude.observe_claude(Path(tmp))
+
+        self.assertEqual(observation.status, AgentStatus.ERROR)
+        self.assertEqual(observation.alert_type, "ERROR")
+        self.assertEqual(observation.alert_message, "Task cancelled")
+
     def test_recent_plain_assistant_event_reports_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             projects = Path(tmp) / "projects"
@@ -112,6 +139,26 @@ class ClaudeProviderTests(unittest.TestCase):
         self.assertEqual(observation.status, AgentStatus.DONE)
         self.assertEqual(observation.alert_type, "DONE")
         self.assertEqual(observation.alert_event_id, "evt_claude_done_msg_done")
+
+    def test_recent_completion_is_reported_without_live_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            projects = Path(tmp) / "projects"
+            self._write_event(
+                projects,
+                {
+                    "type": "assistant",
+                    "timestamp": self._timestamp(minutes_ago=1),
+                    "sessionId": "s1",
+                    "message": {"id": "msg_done", "stop_reason": "end_turn", "content": []},
+                },
+            )
+            with mock.patch.object(claude, "PROJECTS_DIR", projects), mock.patch.object(
+                claude, "_claude_process_running", return_value=False
+            ):
+                observation = claude.observe_claude(Path(tmp))
+
+        self.assertEqual(observation.status, AgentStatus.DONE)
+        self.assertEqual(observation.alert_type, "DONE")
 
     def test_tool_use_assistant_reports_running_not_done(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

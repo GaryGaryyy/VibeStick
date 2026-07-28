@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import os
+import platform
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+from vibe_stick.desktop.process import hidden_subprocess_kwargs
 from vibe_stick.protocol.state import AgentStatus
 from vibe_stick.providers._jsonl import session_files, tail_json_events
 from vibe_stick.providers.base import ProviderObservation
@@ -19,9 +21,9 @@ ALERT_ACTIVITY_WINDOW = timedelta(minutes=5)
 
 
 def observe_claude(project_root: Path) -> ProviderObservation:
+    del project_root
     now = datetime.now(timezone.utc)
     online = _claude_process_running()
-    project = _project_name_from_env_or_root(project_root)
     latest_event: tuple[datetime, str, str] | None = None  # (ts, type, session_id)
     latest_error: tuple[datetime, str, str] | None = None
     latest_done: tuple[datetime, str, str] | None = None
@@ -84,9 +86,7 @@ def observe_claude(project_root: Path) -> ProviderObservation:
     alert_type = "NONE"
     alert_message = ""
     alert_event_id = ""
-    if not online:
-        status = AgentStatus.OFFLINE
-    elif latest_error and _is_latest(latest_error[0]) and now - latest_error[0] <= ALERT_ACTIVITY_WINDOW:
+    if latest_error and _is_latest(latest_error[0]) and now - latest_error[0] <= ALERT_ACTIVITY_WINDOW:
         status = AgentStatus.ERROR
         alert_type = "ERROR"
         alert_event_id = latest_error[1]
@@ -103,13 +103,16 @@ def observe_claude(project_root: Path) -> ProviderObservation:
         alert_message = latest_done[2]
     elif latest_event and now - latest_event[0] <= RUNNING_ACTIVITY_WINDOW:
         status = AgentStatus.RUNNING
+    elif online:
+        status = AgentStatus.IDLE
+    else:
+        status = AgentStatus.OFFLINE
 
     return ProviderObservation(
         provider_id="claude",
         display_name="Claude",
         online=online,
         status=status,
-        project=project,
         quota_5h_remaining=None,
         quota_7d_remaining=None,
         quota_updated_at="",
@@ -122,6 +125,8 @@ def observe_claude(project_root: Path) -> ProviderObservation:
 
 
 def _claude_process_running() -> bool:
+    if platform.system() == "Windows":
+        return _windows_claude_process_running()
     try:
         result = subprocess.run(
             ["ps", "-axo", "command="],
@@ -147,7 +152,50 @@ def _claude_process_running() -> bool:
     return False
 
 
+def _windows_claude_process_running() -> bool:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -match '^(claude|claude-code)\\.exe$' -or "
+        "$_.CommandLine -match '(?i)claude(-code)?' } | "
+        "ForEach-Object { \"$($_.Name)|$($_.CommandLine)\" }",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            **hidden_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    return any(_command_is_claude_process(line) for line in result.stdout.splitlines())
+
+
+def _command_is_claude_process(command: str) -> bool:
+    lower = command.strip().lower()
+    if "|" in lower:
+        process_name, command_line = lower.split("|", 1)
+        if process_name.strip() in {"claude.exe", "claude-code.exe"}:
+            return True
+        lower = command_line.strip()
+    return bool(re.search(r"(^|[\\/\s])claude(?:-code)?(?:\.exe)?(?:[\"\s]|$)", lower))
+
+
 def _error_message(event: dict[str, Any]) -> str | None:
+    event_type = str(event.get("type") or "")
+    subtype = str(event.get("subtype") or "")
+    stop_reason = _stop_reason(event)
+    if any(_is_abnormal_stop(value) for value in (event_type, subtype, stop_reason)):
+        return _message_text(event) or "Claude task stopped unexpectedly"
+    if _truthy(event.get("is_error")) or _truthy(event.get("isError")):
+        return _message_text(event) or "Claude task failed or needs attention"
     if _truthy(event.get("isApiErrorMessage")) or event.get("apiErrorStatus") is not None or event.get("error"):
         return _message_text(event) or "Claude task failed or needs attention"
     message = event.get("message")
@@ -155,6 +203,31 @@ def _error_message(event: dict[str, Any]) -> str | None:
         if _truthy(message.get("isApiErrorMessage")) or message.get("apiErrorStatus") is not None or message.get("error"):
             return _message_text(event) or "Claude task failed or needs attention"
     return None
+
+
+def _is_abnormal_stop(value: str) -> bool:
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return False
+    return normalized in {
+        "aborted",
+        "abort",
+        "cancelled",
+        "canceled",
+        "cancel",
+        "interrupted",
+        "interrupt",
+        "crashed",
+        "crash",
+        "panic",
+        "task_aborted",
+        "task_cancelled",
+        "task_canceled",
+        "turn_aborted",
+        "turn_cancelled",
+        "turn_canceled",
+        "turn_interrupted",
+    } or any(marker in normalized for marker in ("abort", "cancel", "interrupt", "crash", "panic"))
 
 
 def _stop_reason(event: dict[str, Any]) -> str:
@@ -241,17 +314,3 @@ def _parse_timestamp(value: object) -> datetime | None:
 
 def _truthy(value: object) -> bool:
     return value is True or (isinstance(value, str) and value.lower() == "true")
-
-
-def _project_name_from_env_or_root(project_root: Path) -> str:
-    configured = os.environ.get("VIBE_STICK_PROJECT_NAME", "").strip()
-    if configured:
-        return configured
-    return _project_name_from_path(project_root)
-
-
-def _project_name_from_path(path: Path) -> str:
-    root = path.expanduser().resolve()
-    if root.name in {"bridge", "firmware", "app", "scripts"} and (root.parent / "README.md").exists():
-        root = root.parent
-    return root.name or "vibestick"

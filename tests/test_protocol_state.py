@@ -15,6 +15,12 @@ class ProtocolStateTests(unittest.TestCase):
         )
 
         self.assertIsNone(state.to_jsonable()["battery"])
+        self.assertEqual(state.to_jsonable()["computer_name"], "Computer")
+
+    def test_bridge_state_preserves_computer_name(self) -> None:
+        state = state_from_dict({"computer_name": "Long Windows Workstation"})
+
+        self.assertEqual(state.to_jsonable()["computer_name"], "Long Windows Workstation")
 
     def test_legacy_codex_block_populates_generic_provider(self) -> None:
         state = state_from_dict(
@@ -33,8 +39,10 @@ class ProtocolStateTests(unittest.TestCase):
         self.assertEqual(payload["active_provider"], "codex")
         self.assertEqual(payload["provider"]["id"], "codex")
         self.assertEqual(payload["provider"]["status"], "RUNNING")
+        self.assertNotIn("project", payload["provider"])
         self.assertEqual(payload["provider"]["quota_5h_remaining"], 66)
         self.assertEqual(payload["codex"]["status"], "RUNNING")
+        self.assertNotIn("project", payload["codex"])
 
     def test_generic_provider_block_serializes_status_string(self) -> None:
         state = default_state()
@@ -44,7 +52,6 @@ class ProtocolStateTests(unittest.TestCase):
             display_name="Claude",
             implemented=True,
             status=AgentStatus.ERROR,
-            project="VibeStick",
             quota_5h_remaining=None,
             quota_7d_remaining=None,
             quota_updated_at="",

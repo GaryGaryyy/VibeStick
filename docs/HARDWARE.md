@@ -15,7 +15,9 @@ The project does not currently claim support for other devices because the UI la
 - Speaker: ES8311 / I2S playback for generated agent status tones.
 - Wi-Fi: HTTP communication with the Mac bridge on a 2.4 GHz Wi-Fi network. StickS3 / ESP32-S3 does not support 5 GHz Wi-Fi.
 - USB-C: flashing and serial monitor.
-- Battery / USB power: local PMIC reads for the battery UI.
+- Battery / USB power: local M5PM1 PMIC reads for the battery UI, USB detection, power hold, and speaker amplifier enable.
+
+The firmware uses one StickS3-specific PMIC path in `firmware/sticks3/src/vibe_board.c`. Power hold, LDO/speaker setup, battery level, charging, and USB power detection stay in that driver so display behavior does not fight another power stack.
 
 ## Firmware Configuration
 

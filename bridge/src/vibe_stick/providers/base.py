@@ -13,7 +13,6 @@ class ProviderObservation:
     display_name: str
     online: bool
     status: AgentStatus
-    project: str
     quota_5h_remaining: int | None
     quota_7d_remaining: int | None
     quota_updated_at: str

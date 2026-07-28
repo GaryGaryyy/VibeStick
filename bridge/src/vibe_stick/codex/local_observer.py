@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import os
+import platform
+import re
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from vibe_stick.codex.quota import QuotaSnapshot
+from vibe_stick.desktop.process import hidden_subprocess_kwargs
 from vibe_stick.protocol.state import AgentStatus
 from vibe_stick.providers._jsonl import session_files, tail_json_events
 
@@ -24,7 +26,6 @@ QUOTA_STALE_AFTER = timedelta(minutes=30)
 @dataclass
 class LocalCodexObservation:
     status: AgentStatus
-    project: str
     quota: QuotaSnapshot | None
     quota_found: bool
     alert_type: str = ""
@@ -37,11 +38,9 @@ class LocalCodexObservation:
 
 
 def observe_codex(project_root: Path) -> LocalCodexObservation:
+    del project_root
     now = datetime.now(timezone.utc)
     codex_online = _codex_process_running()
-    project = _project_name_from_env_or_root(project_root)
-    latest_cwd: Path | None = None
-    latest_cwd_timestamp: datetime | None = None
     latest_event: tuple[datetime, str, str] | None = None
     latest_alert: tuple[datetime, AgentStatus, str, str] | None = None
     latest_quota: tuple[datetime, QuotaSnapshot] | None = None
@@ -60,13 +59,6 @@ def observe_codex(project_root: Path) -> LocalCodexObservation:
             payload_type = str(payload.get("type") or top_type)
             candidate_type = payload_type or top_type
 
-            if top_type == "turn_context":
-                cwd = payload.get("cwd")
-                if isinstance(cwd, str) and cwd:
-                    if latest_cwd is None or _is_newer(timestamp, latest_cwd_timestamp):
-                        latest_cwd = Path(cwd)
-                        latest_cwd_timestamp = timestamp
-
             if candidate_type:
                 if latest_event is None or timestamp > latest_event[0]:
                     latest_event = (timestamp, candidate_type, str(payload.get("message") or ""))
@@ -81,22 +73,18 @@ def observe_codex(project_root: Path) -> LocalCodexObservation:
                 if latest_alert is None or timestamp > latest_alert[0]:
                     latest_alert = (timestamp, alert_status, alert_kind, message)
 
-    if latest_cwd is not None:
-        project = _project_name_from_path(latest_cwd)
-
     quota_snapshot = latest_quota[1] if latest_quota else None
-    if not codex_online:
-        status = AgentStatus.OFFLINE
-    elif latest_alert and now - latest_alert[0] <= ALERT_ACTIVITY_WINDOW:
+    if latest_alert and now - latest_alert[0] <= ALERT_ACTIVITY_WINDOW:
         status = latest_alert[1]
     elif latest_event and now - latest_event[0] <= RUNNING_ACTIVITY_WINDOW:
         status = AgentStatus.RUNNING
-    else:
+    elif codex_online:
         status = AgentStatus.IDLE
+    else:
+        status = AgentStatus.OFFLINE
 
     observation = LocalCodexObservation(
         status=status,
-        project=project,
         quota=quota_snapshot,
         quota_found=quota_snapshot is not None,
         latest_session_path=latest_session_path,
@@ -167,12 +155,28 @@ def _alert_from_payload(
     payload_type: str,
     payload: dict[str, Any],
 ) -> tuple[AgentStatus, str, str] | None:
-    normalized = payload_type.lower()
+    normalized = payload_type.strip().lower().replace("-", "_").replace(" ", "_")
     if normalized == "task_complete":
         return (AgentStatus.DONE, "DONE", "Codex task completed")
     if "approval" in normalized or "permission" in normalized:
         return (AgentStatus.APPROVAL, "APPROVAL", "Codex is waiting for approval")
-    if normalized in {"error", "agent_error"} or normalized.endswith("_error"):
+    abnormal_stop = normalized in {
+        "task_aborted",
+        "task_cancelled",
+        "task_canceled",
+        "task_interrupted",
+        "turn_aborted",
+        "turn_cancelled",
+        "turn_canceled",
+        "turn_interrupted",
+        "session_aborted",
+        "session_cancelled",
+        "session_canceled",
+    } or any(marker in normalized for marker in ("abort", "cancel", "interrupt", "crash", "panic"))
+    if abnormal_stop:
+        message = str(payload.get("message") or payload.get("error") or "Codex task stopped unexpectedly")
+        return (AgentStatus.ERROR, "ERROR", message)
+    if normalized in {"error", "agent_error", "task_failed", "turn_failed"} or normalized.endswith("_error"):
         message = str(payload.get("message") or payload.get("error") or "Codex task failed or needs attention")
         return (AgentStatus.ERROR, "ERROR", message)
     rate_limit_reached = payload.get("rate_limit_reached_type")
@@ -193,11 +197,9 @@ def _parse_timestamp(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _is_newer(value: datetime, other: datetime | None) -> bool:
-    return other is None or value > other
-
-
 def _codex_process_running() -> bool:
+    if platform.system() == "Windows":
+        return _windows_codex_process_running()
     try:
         result = subprocess.run(
             ["ps", "-axo", "command="],
@@ -212,23 +214,51 @@ def _codex_process_running() -> bool:
         return False
 
     for line in result.stdout.splitlines():
-        lower = line.lower()
-        if "/applications/codex.app/" in lower:
-            return True
-        if "codex app-server" in lower:
+        if _command_is_codex_process(line):
             return True
     return False
 
 
-def _project_name_from_env_or_root(project_root: Path) -> str:
-    configured = os.environ.get("VIBE_STICK_PROJECT_NAME", "").strip()
-    if configured:
-        return configured
-    return _project_name_from_path(project_root)
+def _windows_codex_process_running() -> bool:
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -match '^(codex|ChatGPT)\\.exe$' -or $_.CommandLine -match 'codex' } | "
+        "ForEach-Object { \"$($_.Name)|$($_.CommandLine)\" }",
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3,
+            **hidden_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    return any(_command_is_codex_process(line) for line in result.stdout.splitlines())
 
 
-def _project_name_from_path(path: Path) -> str:
-    root = path.expanduser().resolve()
-    if root.name in {"bridge", "firmware", "app", "scripts"} and (root.parent / "README.md").exists():
-        root = root.parent
-    return root.name or "vibestick"
+def _command_is_codex_process(command: str) -> bool:
+    lower = command.lower()
+    if "|" in lower:
+        process_name, command_line = lower.split("|", 1)
+        if process_name.strip() in {"codex.exe", "chatgpt.exe"}:
+            return True
+        lower = command_line.strip()
+    if "/applications/codex.app/" in lower:
+        return True
+    if re.search(r"\\codex(\.exe)?(\s|$)", lower) and _has_app_server_arg(lower):
+        return True
+    if "/contents/resources/codex " in lower and _has_app_server_arg(lower):
+        return True
+    return bool(re.search(r"(^|[/\s])codex(\s|$)", lower) and _has_app_server_arg(lower))
+
+
+def _has_app_server_arg(command: str) -> bool:
+    return bool(re.search(r"(^|\s)app-server(\s|$)", command))

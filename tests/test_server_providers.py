@@ -16,6 +16,14 @@ class ServerProviderTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"VIBE_STICK_PROVIDER": "bogus"}):
             self.assertEqual(app._configured_provider(), "auto")
 
+    def test_computer_name_prefers_environment_override(self) -> None:
+        with mock.patch.dict(os.environ, {"VIBE_STICK_COMPUTER_NAME": "Desk PC"}):
+            self.assertEqual(app._computer_name(), "Desk PC")
+
+    def test_computer_name_sanitizes_display_value(self) -> None:
+        with mock.patch.dict(os.environ, {"VIBE_STICK_COMPUTER_NAME": "小雕 PC"}):
+            self.assertEqual(app._computer_name(), "PC")
+
     def test_select_active_provider_respects_pinned_config(self) -> None:
         self.assertEqual(app._select_active_provider("claude", "codex", self._obs("codex"), self._obs("claude")), "claude")
 
@@ -48,6 +56,16 @@ class ServerProviderTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, "claude")
+
+    def test_select_active_provider_prefers_recent_status_without_live_process(self) -> None:
+        selected = app._select_active_provider(
+            "auto",
+            "claude",
+            self._obs("codex", online=False, status=AgentStatus.DONE),
+            self._obs("claude", online=False),
+        )
+
+        self.assertEqual(selected, "codex")
 
     def test_select_alert_observation_uses_non_active_provider_alert(self) -> None:
         active = self._obs("claude")
@@ -82,6 +100,27 @@ class ServerProviderTests(unittest.TestCase):
         selected = app._select_alert_observation(active, codex, active)
 
         self.assertIs(selected, active)
+
+    def test_running_provider_disappearance_becomes_error_alert(self) -> None:
+        store = app.BridgeStateStore.__new__(app.BridgeStateStore)
+        store._last_observed_status = {"codex": AgentStatus.RUNNING}
+        observation = self._obs("codex", online=False, status=AgentStatus.OFFLINE)
+
+        store._mark_unexpected_stops(observation)
+
+        self.assertEqual(observation.status, AgentStatus.ERROR)
+        self.assertEqual(observation.alert_type, "ERROR")
+        self.assertIn("stopped unexpectedly", observation.alert_message)
+
+    def test_idle_provider_disappearance_does_not_alert(self) -> None:
+        store = app.BridgeStateStore.__new__(app.BridgeStateStore)
+        store._last_observed_status = {"codex": AgentStatus.IDLE}
+        observation = self._obs("codex", online=False, status=AgentStatus.OFFLINE)
+
+        store._mark_unexpected_stops(observation)
+
+        self.assertEqual(observation.status, AgentStatus.OFFLINE)
+        self.assertEqual(observation.alert_type, "NONE")
 
     def test_claude_usage_interval_has_minimum(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -142,7 +181,6 @@ class ServerProviderTests(unittest.TestCase):
             display_name="Claude",
             implemented=True,
             status=AgentStatus.IDLE,
-            project="VibeStick",
             quota_5h_remaining=26,
             quota_7d_remaining=92,
             quota_updated_at="22:44",
@@ -163,7 +201,6 @@ class ServerProviderTests(unittest.TestCase):
             display_name="Codex",
             implemented=True,
             status=AgentStatus.IDLE,
-            project="VibeStick",
             quota_5h_remaining=26,
             quota_7d_remaining=92,
             quota_updated_at="22:44",
@@ -191,7 +228,6 @@ class ServerProviderTests(unittest.TestCase):
             display_name=provider_id.title(),
             online=online,
             status=status,
-            project="VibeStick",
             quota_5h_remaining=None,
             quota_7d_remaining=None,
             quota_updated_at="",

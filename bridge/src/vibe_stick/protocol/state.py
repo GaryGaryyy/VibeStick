@@ -26,7 +26,6 @@ class AlertType(StrEnum):
 @dataclass
 class CodexState:
     status: AgentStatus = AgentStatus.IDLE
-    project: str = "vibestick"
     quota_5h_remaining: int | None = None
     quota_7d_remaining: int | None = None
     quota_updated_at: str = ""
@@ -39,7 +38,6 @@ class ProviderState:
     display_name: str = "Codex"
     implemented: bool = True
     status: AgentStatus = AgentStatus.IDLE
-    project: str = "vibestick"
     quota_5h_remaining: int | None = None
     quota_7d_remaining: int | None = None
     quota_updated_at: str = ""
@@ -59,6 +57,7 @@ class VibeStickState:
     wifi: bool
     ble: bool
     battery: int | None
+    computer_name: str
     active_provider: str
     provider: ProviderState
     codex: CodexState
@@ -93,11 +92,11 @@ def state_from_dict(data: dict[str, Any]) -> VibeStickState:
         wifi=bool(data.get("wifi", True)),
         ble=bool(data.get("ble", False)),
         battery=data.get("battery"),
+        computer_name=str(data.get("computer_name") or "Computer"),
         active_provider=str(data.get("active_provider") or provider_state.id),
         provider=provider_state,
         codex=CodexState(
             status=AgentStatus(codex_data.get("status", AgentStatus.IDLE.value)),
-            project=str(codex_data.get("project") or "vibestick"),
             quota_5h_remaining=codex_data.get("quota_5h_remaining"),
             quota_7d_remaining=codex_data.get("quota_7d_remaining"),
             quota_updated_at=str(codex_data.get("quota_updated_at") or ""),
@@ -118,7 +117,6 @@ def _provider_state_from_dict(provider_data: dict[str, Any], codex_data: dict[st
             display_name=str(provider_data.get("display_name") or "Codex"),
             implemented=bool(provider_data.get("implemented", True)),
             status=AgentStatus(provider_data.get("status", AgentStatus.IDLE.value)),
-            project=str(provider_data.get("project") or "vibestick"),
             quota_5h_remaining=provider_data.get("quota_5h_remaining"),
             quota_7d_remaining=provider_data.get("quota_7d_remaining"),
             quota_updated_at=str(provider_data.get("quota_updated_at") or ""),
@@ -130,7 +128,6 @@ def _provider_state_from_dict(provider_data: dict[str, Any], codex_data: dict[st
         display_name="Codex",
         implemented=True,
         status=AgentStatus(codex_data.get("status", AgentStatus.IDLE.value)),
-        project=str(codex_data.get("project") or "vibestick"),
         quota_5h_remaining=codex_data.get("quota_5h_remaining"),
         quota_7d_remaining=codex_data.get("quota_7d_remaining"),
         quota_updated_at=str(codex_data.get("quota_updated_at") or ""),
@@ -141,7 +138,6 @@ def _provider_state_from_dict(provider_data: dict[str, Any], codex_data: dict[st
 def default_state() -> VibeStickState:
     codex = CodexState(
         status=AgentStatus.RUNNING,
-        project="vibestick",
         quota_5h_remaining=None,
         quota_7d_remaining=None,
         quota_updated_at="",
@@ -152,13 +148,13 @@ def default_state() -> VibeStickState:
         wifi=True,
         ble=False,
         battery=None,
+        computer_name="Computer",
         active_provider="codex",
         provider=ProviderState(
             id="codex",
             display_name="Codex",
             implemented=True,
             status=codex.status,
-            project=codex.project,
             quota_5h_remaining=codex.quota_5h_remaining,
             quota_7d_remaining=codex.quota_7d_remaining,
             quota_updated_at=codex.quota_updated_at,

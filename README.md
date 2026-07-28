@@ -10,10 +10,12 @@ VibeStick turns an M5Stack StickS3 into a tiny desktop companion for coding agen
 
 VibeStick targets M5Stack StickS3 hardware and is not an official M5Stack project. Third-party agent names such as Codex and Claude describe compatible local tools and integrations only.
 
+For the complete flashing, usage, Windows background installation, multi-computer switching, and troubleshooting steps, see the [Chinese usage and flashing guide](docs/USAGE.zh-CN.md).
+
 ## What you'll need (prepare first)
 
 - [ ] M5Stack StickS3 and a USB-C data cable.
-- [ ] A Mac on the same network as the StickS3.
+- [ ] A Mac on the same network as the StickS3. Optional: a Windows PC on the same Wi-Fi for the Windows bridge runner.
 - [ ] Wi-Fi name and password. The Wi-Fi must be 2.4 GHz; StickS3 / ESP32-S3 does not support 5 GHz Wi-Fi.
 - [ ] To show Claude 5H/7D usage: this feature is off by default (safer). It needs the Claude Code CLI (run `claude` then `/login` in Terminal) and `VIBE_STICK_CLAUDE_USAGE=on` in `.env`.
 - [ ] An ASR API key for speech transcription. Recommended: SiliconFlow at <https://cloud.siliconflow.cn/i/7ZCoy9fU>. It works directly in China, has free quota, and is OpenAI-compatible. The demo video uses SiliconFlow. You can also use another OpenAI-compatible ASR provider's `base_url` and model name instead.
@@ -107,6 +109,39 @@ If Codex works but the Claude column shows `--%`, that is expected: Claude usage
 
 11. 👤 Open any text box, long-press the front blue button, speak, and release. VibeStick should transcribe and paste the text automatically.
 
+### Optional Windows Wi-Fi Bridge
+
+To run the bridge on a Windows computer, install the Windows bridge on that PC:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\scripts\install_windows.ps1
+```
+
+The installer creates hidden per-user Scheduled Tasks for the bridge and a temporary recording overlay, then starts them immediately, so no console window needs to remain open. The overlay appears only while the StickS3 is recording or transcribing. The generated command runner at `%APPDATA%\VibeStick\run-vibestick-wifi-bridge.cmd` remains available for manual diagnostics.
+
+Do not use the manual diagnostic window as the background service; closing that `.cmd` window stops that manual process. The background bridge writes logs to `%APPDATA%\VibeStick\bridge.log`.
+
+If you previously started the bridge by double-clicking the `.cmd` file or running `python` directly, run the installer once more. It stops stale manual bridge processes, re-registers the hidden background task, and starts it; after installation, you can close PowerShell and all Python windows.
+
+PowerShell helpers used for Windows agent detection and paste injection run with hidden subprocess flags, so they do not flash a console window during state polling. With the default SiliconFlow ASR, Windows background configuration only needs one line, `VIBE_STICK_ASR_API_KEY=your-key`; the URL, model, and language use built-in defaults. Override them only for another ASR service.
+
+Open `%APPDATA%\VibeStick\.env` and fill `VIBE_STICK_ASR_API_KEY` before voice transcription. Do not set the key only as a temporary PowerShell `$env:` variable; a background task does not inherit it after that window closes. Do not copy the Mac `.env` blindly if it contains Mac-only settings. The Windows bridge receives microphone PCM from the StickS3 over Wi-Fi; it does not need to open a Windows microphone. The bridge handles transcription and pastes into the currently focused Windows application.
+
+The StickS3 status dot reports the local agent (Codex/Claude), not bridge reachability. If the bridge is reachable but no supported agent process is running on Windows, StickS3 shows `IDLE`; it shows `OFFLINE` only when the bridge or Wi-Fi is unreachable. The computer name and Wi-Fi connection can still be displayed.
+
+Cancelled, interrupted, crashed, or unexpectedly stopped agent tasks are reported as errors and trigger the StickS3 error alert sound.
+
+On Windows, the bridge observes Codex/ChatGPT/Claude process names and local session logs; a task that finishes or fails just before its agent process exits still keeps its recent status and alert.
+
+The firmware starts with the bridge host compiled into it, then can discover and save another bridge on the same LAN. Runtime state, alerts, recording transcription, and paste injection use Wi-Fi.
+
+### Multiple Computers
+
+When several computers on the same LAN are running VibeStick Bridge, long-press the StickS3 side button to search. Short-press the side button to move down the list, then press the front blue button to select a computer. The StickS3 saves the selected bridge host and keeps using Wi-Fi for all runtime traffic.
+
+Discovery uses UDP port `8766`; the bridge replies with the computer name and HTTP port. The StickS3 includes its bridge token in the discovery packet, so a bridge without a local token can remember it. On Windows, allow Python/VibeStick Bridge through the firewall if discovery does not find the PC.
+
 For development without installing LaunchAgents, run `./scripts/dev.sh` from the repository root instead of `./scripts/install.sh`.
 
 ## Troubleshooting
@@ -162,7 +197,7 @@ Empty values in `.env` generally mean "use the built-in default". `scripts/dev.s
 ### Core settings
 
 - `VIBE_STICK_PROJECT_ROOT`: project root used for local Codex session observation.
-- `VIBE_STICK_PROJECT_NAME`: optional display-name override.
+- `VIBE_STICK_COMPUTER_NAME`: optional computer-name override shown on the StickS3 home screen.
 - `VIBE_STICK_PROVIDER`: active provider selection, `auto`, `codex`, or `claude`; default `auto`.
 - `VIBE_STICK_BRIDGE_TOKEN`: shared token required whenever the bridge binds outside loopback, such as `0.0.0.0`.
 - `VIBE_STICK_MAX_RECORDING_AUDIO_BYTES`: max `/recording/audio` body size, default `2000000`.
@@ -257,6 +292,9 @@ idf.py build
 
 - This is a cleaned prototype, not a packaged Mac app or DMG.
 - The firmware targets M5Stack StickS3 only.
+- The home screen prioritizes provider status and computer name; 5H/7D quota values are still available in bridge state but are not shown on the current stable UI.
+- The screen is dimmer than before, the backlight turns off after 5 seconds of idle time, and the firmware defaults to an 80 MHz CPU clock.
+- Windows support is script-based and needs Python 3.11+. The generated runner is not a signed Windows app.
 - Codex quota is inferred from local Codex session JSONL events with `rate_limits`; it is not an official quota API.
 - Claude usage comes from an undocumented Claude Code OAuth endpoint and is disabled by default.
 - ASR reliability depends on microphone capture, uploaded PCM quality, provider availability, and configured model.

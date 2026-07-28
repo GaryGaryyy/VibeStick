@@ -5,6 +5,8 @@ import hmac
 import ipaddress
 import json
 import os
+import platform
+import socket
 import threading
 import time
 from http import HTTPStatus
@@ -18,8 +20,17 @@ from vibe_stick.audio.recorder import RecordingController
 from vibe_stick.claude.usage import fetch_usage as fetch_claude_usage
 from vibe_stick.claude.usage import to_quota_snapshot as claude_usage_to_quota
 from vibe_stick.codex.quota import QuotaSnapshot, load_quota, save_quota
-from vibe_stick.config.paths import CLAUDE_QUOTA_PATH, QUOTA_PATH, RECORDING_PATH, STATE_PATH, ensure_app_support
+from vibe_stick.config.dotenv import load_dotenv_files
+from vibe_stick.config.paths import (
+    CLAUDE_QUOTA_PATH,
+    PAIRED_TOKEN_PATH,
+    QUOTA_PATH,
+    RECORDING_PATH,
+    STATE_PATH,
+    ensure_app_support,
+)
 from vibe_stick.desktop.hud import hide_hud
+from vibe_stick.paste.input_injector import make_paste_injector
 from vibe_stick.protocol.state import (
     AlertState,
     AlertType,
@@ -41,6 +52,8 @@ BRIDGE_NAME = "vibestick-bridge"
 DEFAULT_MAX_RECORDING_AUDIO_BYTES = 2_000_000
 DEFAULT_CLAUDE_USAGE_INTERVAL_SECONDS = 300
 MIN_CLAUDE_USAGE_INTERVAL_SECONDS = 30
+DISCOVERY_PORT = 8766
+DISCOVERY_PACKET_BYTES = 2048
 PLACEHOLDER_BRIDGE_TOKENS = {
     "change-this-shared-token",
     "paste-generated-token-here",
@@ -57,6 +70,7 @@ class BridgeStateStore:
         self._manual_status_until = 0.0
         self._state = self._load_state()
         self._last_active_provider = self._state.active_provider or "codex"
+        self._last_observed_status: dict[str, AgentStatus] = {}
         self._claude_quota = load_quota(CLAUDE_QUOTA_PATH)
         if not _has_quota(self._claude_quota):
             self._claude_quota = _claude_quota_from_state(self._state)
@@ -74,6 +88,7 @@ class BridgeStateStore:
         with self._lock:
             self._refresh_providers_locked()
             self._state.time = now_time_text()
+            self._state.computer_name = _computer_name()
             self._save_state_locked()
             return self._state
 
@@ -88,6 +103,13 @@ class BridgeStateStore:
                 self.refresh_quota_locked()
             elif event_name == "button_short":
                 self._state.alert = AlertState(event_id="", type=AlertType.NONE, message="")
+                enter_result = make_paste_injector().press_enter()
+                if not enter_result.success:
+                    self._state.alert = AlertState(
+                        event_id("error"),
+                        AlertType.ERROR,
+                        enter_result.message or "Enter injection failed",
+                    )
             self._save_state_locked()
             return self._state
 
@@ -152,6 +174,8 @@ class BridgeStateStore:
         if time.monotonic() < self._manual_status_until:
             _apply_manual_codex_state(codex_observation, self._state)
 
+        self._mark_unexpected_stops(codex_observation, claude_observation)
+
         active_provider = _select_active_provider(
             _configured_provider(),
             self._last_active_provider,
@@ -172,6 +196,20 @@ class BridgeStateStore:
         self._apply_alert_from_observation(
             _select_alert_observation(active_observation, codex_observation, claude_observation)
         )
+
+    def _mark_unexpected_stops(self, *observations: ProviderObservation) -> None:
+        for observation in observations:
+            previous_status = self._last_observed_status.get(observation.provider_id)
+            self._last_observed_status[observation.provider_id] = observation.status
+            if previous_status not in {AgentStatus.RUNNING, AgentStatus.APPROVAL}:
+                continue
+            if observation.status != AgentStatus.OFFLINE:
+                continue
+
+            observation.status = AgentStatus.ERROR
+            observation.alert_type = AlertType.ERROR.value
+            observation.alert_event_id = event_id(f"{observation.provider_id}_aborted")
+            observation.alert_message = f"{observation.display_name} task stopped unexpectedly"
 
     def _apply_alert_from_observation(self, observation: ProviderObservation) -> None:
         try:
@@ -403,9 +441,10 @@ def run_server(host: str, port: int) -> None:
     _enforce_bind_security(host)
     store = BridgeStateStore()
     server = ThreadingHTTPServer((host, port), make_handler(store))
+    _start_discovery_server(port)
     if not _bridge_token():
         print(
-            "WARNING: VIBE_STICK_BRIDGE_TOKEN is not set; POST endpoints are unauthenticated on loopback only.",
+            "WARNING: VIBE_STICK_BRIDGE_TOKEN is not set; POST endpoints are unauthenticated until discovery pairing.",
             flush=True,
         )
     print(f"VibeStick Bridge listening on http://{host}:{port}", flush=True)
@@ -423,6 +462,10 @@ def _protected_paths() -> set[str]:
 
 
 def _bridge_token() -> str:
+    return _configured_bridge_token() or _paired_bridge_token()
+
+
+def _configured_bridge_token() -> str:
     token = os.environ.get("VIBE_STICK_BRIDGE_TOKEN", "").strip()
     if token.lower() in PLACEHOLDER_BRIDGE_TOKENS:
         return ""
@@ -431,10 +474,77 @@ def _bridge_token() -> str:
 
 def _enforce_bind_security(host: str) -> None:
     if _host_requires_token(host) and not _bridge_token():
-        raise SystemExit(
-            "Refusing to bind VibeStick Bridge outside loopback without "
-            "VIBE_STICK_BRIDGE_TOKEN. Set a strong shared token or use --host 127.0.0.1."
-        )
+        print("WARNING: VibeStick Bridge is binding outside loopback without a token.", flush=True)
+
+
+def _paired_bridge_token() -> str:
+    try:
+        token = PAIRED_TOKEN_PATH.read_text().strip()
+    except OSError:
+        return ""
+    return "" if token.lower() in PLACEHOLDER_BRIDGE_TOKENS else token
+
+
+def _remember_pairing_token(token: str) -> None:
+    token = token.strip()
+    if not token or token.lower() in PLACEHOLDER_BRIDGE_TOKENS:
+        return
+    if _configured_bridge_token():
+        return
+    try:
+        PAIRED_TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PAIRED_TOKEN_PATH.write_text(token + "\n")
+    except OSError as exc:
+        print(f"discovery token save failed: {exc}", flush=True)
+
+
+def _start_discovery_server(http_port: int) -> None:
+    thread = threading.Thread(
+        target=_serve_discovery,
+        args=(http_port,),
+        name="vibestick-discovery",
+        daemon=True,
+    )
+    thread.start()
+
+
+def _serve_discovery(http_port: int) -> None:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("", DISCOVERY_PORT))
+    except OSError as exc:
+        print(f"VibeStick discovery disabled: {exc}", flush=True)
+        sock.close()
+        return
+
+    print(f"VibeStick discovery listening on udp://0.0.0.0:{DISCOVERY_PORT}", flush=True)
+    while True:
+        try:
+            data, address = sock.recvfrom(DISCOVERY_PACKET_BYTES)
+            response = _discovery_response(data, http_port)
+            if response:
+                sock.sendto(response, address)
+        except OSError as exc:
+            print(f"VibeStick discovery error: {exc}", flush=True)
+            time.sleep(1)
+
+
+def _discovery_response(data: bytes, http_port: int) -> bytes | None:
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "vibestick_discover":
+        return None
+    _remember_pairing_token(str(payload.get("token") or ""))
+    response = {
+        "type": "vibestick_bridge",
+        "name": _computer_name(),
+        "port": http_port,
+        "version": BRIDGE_VERSION,
+    }
+    return json.dumps(response, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def _host_requires_token(host: str) -> bool:
@@ -511,6 +621,23 @@ def _configured_provider() -> str:
     return value if value in {"codex", "claude", "auto"} else "auto"
 
 
+def _computer_name() -> str:
+    configured = os.environ.get("VIBE_STICK_COMPUTER_NAME", "").strip()
+    if configured:
+        return _display_safe_name(configured)
+    for candidate in (platform.node(), socket.gethostname()):
+        candidate = candidate.strip()
+        if candidate:
+            return _display_safe_name(candidate.split(".")[0])
+    return "Computer"
+
+
+def _display_safe_name(value: str, fallback: str = "Computer") -> str:
+    cleaned = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in value)
+    name = " ".join(cleaned.split())
+    return name[:40] or fallback
+
+
 def _select_active_provider(
     configured: str,
     last_active: str,
@@ -520,11 +647,13 @@ def _select_active_provider(
     if configured in {"codex", "claude"}:
         return configured
 
-    if codex_observation.online and not claude_observation.online:
+    codex_active = _observation_is_active(codex_observation)
+    claude_active = _observation_is_active(claude_observation)
+    if codex_active and not claude_active:
         return "codex"
-    if claude_observation.online and not codex_observation.online:
+    if claude_active and not codex_active:
         return "claude"
-    if codex_observation.online and claude_observation.online:
+    if codex_active and claude_active:
         codex_time = codex_observation.latest_event_timestamp
         claude_time = claude_observation.latest_event_timestamp
         if codex_time is not None and claude_time is not None:
@@ -536,6 +665,15 @@ def _select_active_provider(
         return last_active if last_active in {"codex", "claude"} else "codex"
 
     return last_active if last_active in {"codex", "claude"} else "codex"
+
+
+def _observation_is_active(observation: ProviderObservation) -> bool:
+    return observation.online or observation.status in {
+        AgentStatus.RUNNING,
+        AgentStatus.DONE,
+        AgentStatus.APPROVAL,
+        AgentStatus.ERROR,
+    }
 
 
 def _select_alert_observation(
@@ -573,7 +711,6 @@ def _claude_usage_interval_seconds() -> int:
 def _codex_state_from_observation(observation: ProviderObservation) -> CodexState:
     return CodexState(
         status=observation.status,
-        project=observation.project,
         quota_5h_remaining=observation.quota_5h_remaining,
         quota_7d_remaining=observation.quota_7d_remaining,
         quota_updated_at=observation.quota_updated_at,
@@ -587,7 +724,6 @@ def _provider_state_from_observation(observation: ProviderObservation) -> Provid
         display_name=observation.display_name,
         implemented=True,
         status=observation.status,
-        project=observation.project,
         quota_5h_remaining=observation.quota_5h_remaining,
         quota_7d_remaining=observation.quota_7d_remaining,
         quota_updated_at=observation.quota_updated_at,
@@ -618,5 +754,6 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> None:
+    load_dotenv_files()
     args = build_parser().parse_args(argv)
     run_server(args.host, args.port)

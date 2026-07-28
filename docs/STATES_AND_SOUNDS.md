@@ -6,6 +6,7 @@ VibeStick v0.1.2 plays sounds only for key agent status changes on the home scre
 | --- | --- | --- |
 | Completed / 完成 | Codex or Claude reports `DONE`, `COMPLETED`, or `SUCCESS` | 880 Hz 80 ms, 40 ms gap, 1320 Hz 120 ms |
 | Error / 报错 | Codex or Claude reports `ERROR`, `FAILED`, or `FAILURE` | 240 Hz 100 ms, 60 ms gap, repeated 3 times |
+| Recording failed / 识别失败 | Recording upload, ASR, transcript rejection, or paste injection fails | 240 Hz 100 ms, 60 ms gap, repeated 3 times |
 | Waiting for approval / 等待审批 | Codex or Claude reports `APPROVAL`, `WAITING_APPROVAL`, `PENDING_APPROVAL`, or `NEEDS_APPROVAL` | 600 Hz 100 ms, 60 ms gap, 800 Hz 100 ms |
 
 ## No Sound
@@ -13,7 +14,6 @@ VibeStick v0.1.2 plays sounds only for key agent status changes on the home scre
 These states and events do not play sounds:
 
 - Recording start.
-- Recording stop.
 - Recording in progress.
 - Idle.
 - Ready.

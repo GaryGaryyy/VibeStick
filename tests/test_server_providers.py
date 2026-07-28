@@ -91,6 +91,27 @@ class ServerProviderTests(unittest.TestCase):
 
         self.assertIs(selected, active)
 
+    def test_running_provider_disappearance_becomes_error_alert(self) -> None:
+        store = app.BridgeStateStore.__new__(app.BridgeStateStore)
+        store._last_observed_status = {"codex": AgentStatus.RUNNING}
+        observation = self._obs("codex", online=False, status=AgentStatus.OFFLINE)
+
+        store._mark_unexpected_stops(observation)
+
+        self.assertEqual(observation.status, AgentStatus.ERROR)
+        self.assertEqual(observation.alert_type, "ERROR")
+        self.assertIn("stopped unexpectedly", observation.alert_message)
+
+    def test_idle_provider_disappearance_does_not_alert(self) -> None:
+        store = app.BridgeStateStore.__new__(app.BridgeStateStore)
+        store._last_observed_status = {"codex": AgentStatus.IDLE}
+        observation = self._obs("codex", online=False, status=AgentStatus.OFFLINE)
+
+        store._mark_unexpected_stops(observation)
+
+        self.assertEqual(observation.status, AgentStatus.OFFLINE)
+        self.assertEqual(observation.alert_type, "NONE")
+
     def test_claude_usage_interval_has_minimum(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(app._claude_usage_interval_seconds(), 300)

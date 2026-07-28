@@ -120,7 +120,9 @@ The installer creates hidden per-user Scheduled Tasks for the bridge and a tempo
 
 Open `%APPDATA%\VibeStick\.env` and fill `VIBE_STICK_ASR_API_KEY` (and the matching ASR provider/base URL/model) before voice transcription. Do not copy the Mac `.env` blindly if it contains Mac-only settings. The Windows bridge receives microphone PCM from the StickS3 over Wi-Fi; it does not need to open a Windows microphone. The bridge handles transcription and pastes into the currently focused Windows application.
 
-The StickS3 status dot reports the local agent (Codex/Claude), not bridge reachability. If the bridge is reachable but no supported agent process is running on Windows, the dot correctly shows `OFFLINE`; the computer name and Wi-Fi connection can still be displayed.
+The StickS3 status dot reports the local agent (Codex/Claude), not bridge reachability. If the bridge is reachable but no supported agent process is running on Windows, StickS3 shows `IDLE`; it shows `OFFLINE` only when the bridge or Wi-Fi is unreachable. The computer name and Wi-Fi connection can still be displayed.
+
+Cancelled, interrupted, crashed, or unexpectedly stopped agent tasks are reported as errors and trigger the StickS3 error alert sound.
 
 The firmware starts with the bridge host compiled into it, then can discover and save another bridge on the same LAN. Runtime state, alerts, recording transcription, and paste injection use Wi-Fi.
 

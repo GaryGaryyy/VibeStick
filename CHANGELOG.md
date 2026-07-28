@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.7
+
+- Distinguish an unreachable bridge from an online bridge whose local Codex/Claude provider is not running; the StickS3 now shows `待命` for the latter instead of `离线`.
+
 ## v0.1.6
 
 - Search picker uses a complete ASCII font and sanitizes discovered computer names so names and host details remain visible on StickS3.

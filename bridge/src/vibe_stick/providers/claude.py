@@ -146,6 +146,13 @@ def _claude_process_running() -> bool:
 
 
 def _error_message(event: dict[str, Any]) -> str | None:
+    event_type = str(event.get("type") or "")
+    subtype = str(event.get("subtype") or "")
+    stop_reason = _stop_reason(event)
+    if any(_is_abnormal_stop(value) for value in (event_type, subtype, stop_reason)):
+        return _message_text(event) or "Claude task stopped unexpectedly"
+    if _truthy(event.get("is_error")) or _truthy(event.get("isError")):
+        return _message_text(event) or "Claude task failed or needs attention"
     if _truthy(event.get("isApiErrorMessage")) or event.get("apiErrorStatus") is not None or event.get("error"):
         return _message_text(event) or "Claude task failed or needs attention"
     message = event.get("message")
@@ -153,6 +160,31 @@ def _error_message(event: dict[str, Any]) -> str | None:
         if _truthy(message.get("isApiErrorMessage")) or message.get("apiErrorStatus") is not None or message.get("error"):
             return _message_text(event) or "Claude task failed or needs attention"
     return None
+
+
+def _is_abnormal_stop(value: str) -> bool:
+    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if not normalized:
+        return False
+    return normalized in {
+        "aborted",
+        "abort",
+        "cancelled",
+        "canceled",
+        "cancel",
+        "interrupted",
+        "interrupt",
+        "crashed",
+        "crash",
+        "panic",
+        "task_aborted",
+        "task_cancelled",
+        "task_canceled",
+        "turn_aborted",
+        "turn_cancelled",
+        "turn_canceled",
+        "turn_interrupted",
+    } or any(marker in normalized for marker in ("abort", "cancel", "interrupt", "crash", "panic"))
 
 
 def _stop_reason(event: dict[str, Any]) -> str:

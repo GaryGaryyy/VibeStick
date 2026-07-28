@@ -70,6 +70,7 @@ class BridgeStateStore:
         self._manual_status_until = 0.0
         self._state = self._load_state()
         self._last_active_provider = self._state.active_provider or "codex"
+        self._last_observed_status: dict[str, AgentStatus] = {}
         self._claude_quota = load_quota(CLAUDE_QUOTA_PATH)
         if not _has_quota(self._claude_quota):
             self._claude_quota = _claude_quota_from_state(self._state)
@@ -173,6 +174,8 @@ class BridgeStateStore:
         if time.monotonic() < self._manual_status_until:
             _apply_manual_codex_state(codex_observation, self._state)
 
+        self._mark_unexpected_stops(codex_observation, claude_observation)
+
         active_provider = _select_active_provider(
             _configured_provider(),
             self._last_active_provider,
@@ -193,6 +196,20 @@ class BridgeStateStore:
         self._apply_alert_from_observation(
             _select_alert_observation(active_observation, codex_observation, claude_observation)
         )
+
+    def _mark_unexpected_stops(self, *observations: ProviderObservation) -> None:
+        for observation in observations:
+            previous_status = self._last_observed_status.get(observation.provider_id)
+            self._last_observed_status[observation.provider_id] = observation.status
+            if previous_status not in {AgentStatus.RUNNING, AgentStatus.APPROVAL}:
+                continue
+            if observation.status != AgentStatus.OFFLINE:
+                continue
+
+            observation.status = AgentStatus.ERROR
+            observation.alert_type = AlertType.ERROR.value
+            observation.alert_event_id = event_id(f"{observation.provider_id}_aborted")
+            observation.alert_message = f"{observation.display_name} task stopped unexpectedly"
 
     def _apply_alert_from_observation(self, observation: ProviderObservation) -> None:
         try:

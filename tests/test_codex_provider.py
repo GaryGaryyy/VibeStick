@@ -2,6 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from vibe_stick.codex.local_observer import LocalCodexObservation
+from vibe_stick.codex.local_observer import _alert_from_payload
 from vibe_stick.codex.local_observer import _command_is_codex_process
 from vibe_stick.codex.quota import QuotaSnapshot
 from vibe_stick.protocol.state import AgentStatus
@@ -9,6 +10,16 @@ from vibe_stick.providers.codex import observation_from_local_codex
 
 
 class CodexProviderTests(unittest.TestCase):
+    def test_aborted_turn_is_reported_as_error_alert(self) -> None:
+        status, alert_type, message = _alert_from_payload(
+            "turn_aborted",
+            {"message": "Turn was interrupted"},
+        )
+
+        self.assertEqual(status, AgentStatus.ERROR)
+        self.assertEqual(alert_type, "ERROR")
+        self.assertEqual(message, "Turn was interrupted")
+
     def test_codex_process_detection_accepts_chatgpt_embedded_app_server(self) -> None:
         self.assertTrue(
             _command_is_codex_process(

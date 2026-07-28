@@ -154,11 +154,27 @@ def _alert_from_payload(
     payload_type: str,
     payload: dict[str, Any],
 ) -> tuple[AgentStatus, str, str] | None:
-    normalized = payload_type.lower()
+    normalized = payload_type.strip().lower().replace("-", "_").replace(" ", "_")
     if normalized == "task_complete":
         return (AgentStatus.DONE, "DONE", "Codex task completed")
     if "approval" in normalized or "permission" in normalized:
         return (AgentStatus.APPROVAL, "APPROVAL", "Codex is waiting for approval")
+    abnormal_stop = normalized in {
+        "task_aborted",
+        "task_cancelled",
+        "task_canceled",
+        "task_interrupted",
+        "turn_aborted",
+        "turn_cancelled",
+        "turn_canceled",
+        "turn_interrupted",
+        "session_aborted",
+        "session_cancelled",
+        "session_canceled",
+    } or any(marker in normalized for marker in ("abort", "cancel", "interrupt", "crash", "panic"))
+    if abnormal_stop:
+        message = str(payload.get("message") or payload.get("error") or "Codex task stopped unexpectedly")
+        return (AgentStatus.ERROR, "ERROR", message)
     if normalized in {"error", "agent_error", "task_failed", "turn_failed"} or normalized.endswith("_error"):
         message = str(payload.get("message") or payload.get("error") or "Codex task failed or needs attention")
         return (AgentStatus.ERROR, "ERROR", message)

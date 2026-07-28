@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.8
+
+- Treat cancelled, interrupted, crashed, or unexpectedly stopped agent tasks as errors so the StickS3 plays the error alert sound.
+- Reduce idle power use with 80 MHz CPU operation, Wi-Fi modem sleep, 5-second state polling, 30-second battery refreshes, and lower backlight brightness.
+
 ## v0.1.7
 
 - Distinguish an unreachable bridge from an online bridge whose local Codex/Claude provider is not running; the StickS3 now shows `待命` for the latter instead of `离线`.

@@ -72,6 +72,28 @@ class ClaudeProviderTests(unittest.TestCase):
         self.assertEqual(observation.alert_type, "ERROR")
         self.assertIn("limit", observation.alert_message)
 
+    def test_cancelled_turn_reports_error_alert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            projects = Path(tmp) / "projects"
+            self._write_event(
+                projects,
+                {
+                    "type": "system",
+                    "subtype": "cancelled",
+                    "timestamp": self._timestamp(minutes_ago=1),
+                    "sessionId": "s1",
+                    "message": "Task cancelled",
+                },
+            )
+            with mock.patch.object(claude, "PROJECTS_DIR", projects), mock.patch.object(
+                claude, "_claude_process_running", return_value=True
+            ):
+                observation = claude.observe_claude(Path(tmp))
+
+        self.assertEqual(observation.status, AgentStatus.ERROR)
+        self.assertEqual(observation.alert_type, "ERROR")
+        self.assertEqual(observation.alert_message, "Task cancelled")
+
     def test_recent_plain_assistant_event_reports_running(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             projects = Path(tmp) / "projects"

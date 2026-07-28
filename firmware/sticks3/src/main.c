@@ -44,7 +44,7 @@
 #define LCD_PIXEL_CLOCK_HZ (20 * 1000 * 1000)
 #define LCD_BACKLIGHT_PWM_HZ 5000
 #define LCD_BACKLIGHT_PWM_MAX 255
-#define LCD_BACKLIGHT_DEFAULT 60
+#define LCD_BACKLIGHT_DEFAULT 45
 #define LVGL_DRAW_BUF_LINES 24
 #define LVGL_TICK_PERIOD_MS 10
 #define BATTERY_FILL_MAX_WIDTH 20
@@ -1586,20 +1586,25 @@ static bool parse_state_json(const char *json)
 static void poll_state(void)
 {
     char response[1536] = {0};
-    int battery_level = 0;
-    if (vibe_board_battery_level(&battery_level) == ESP_OK) {
-        s_state.battery = battery_level;
-    }
-    bool charging = false;
-    bool usb_powered = false;
+    const int64_t current_ms = now_ms();
+    static int64_t last_battery_poll_ms = -1;
     bool power_read_ok = false;
-    if (vibe_board_battery_charging(&charging) == ESP_OK) {
-        s_state.battery_charging = charging;
-        power_read_ok = true;
-    }
-    if (vibe_board_usb_powered(&usb_powered) == ESP_OK) {
-        s_state.usb_powered = usb_powered;
-        power_read_ok = true;
+    if (last_battery_poll_ms < 0 || current_ms - last_battery_poll_ms >= VIBE_STICK_BATTERY_POLL_MS) {
+        int battery_level = 0;
+        if (vibe_board_battery_level(&battery_level) == ESP_OK) {
+            s_state.battery = battery_level;
+        }
+        bool charging = false;
+        bool usb_powered = false;
+        if (vibe_board_battery_charging(&charging) == ESP_OK) {
+            s_state.battery_charging = charging;
+            power_read_ok = true;
+        }
+        if (vibe_board_usb_powered(&usb_powered) == ESP_OK) {
+            s_state.usb_powered = usb_powered;
+            power_read_ok = true;
+        }
+        last_battery_poll_ms = current_ms;
     }
     static bool last_power_logged = false;
     static bool last_charging = false;
@@ -1864,6 +1869,7 @@ static esp_err_t init_wifi(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_STA), TAG, "wifi mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG, "wifi config");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_ps(WIFI_PS_MIN_MODEM), TAG, "wifi power save");
     return ESP_OK;
 }
 

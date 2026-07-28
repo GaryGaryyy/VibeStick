@@ -118,6 +118,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 The installer creates hidden per-user Scheduled Tasks for the bridge and a temporary recording overlay, then starts them immediately, so no console window needs to remain open. The overlay appears only while the StickS3 is recording or transcribing. The generated command runner at `%APPDATA%\VibeStick\run-vibestick-wifi-bridge.cmd` remains available for manual diagnostics.
 
+Do not use the manual diagnostic window as the background service; closing that `.cmd` window stops that manual process. The background bridge writes logs to `%APPDATA%\VibeStick\bridge.log`.
+
+If you previously started the bridge by double-clicking the `.cmd` file or running `python` directly, run the installer once more. It stops stale manual bridge processes, re-registers the hidden background task, and starts it; after installation, you can close PowerShell and all Python windows.
+
 Open `%APPDATA%\VibeStick\.env` and fill `VIBE_STICK_ASR_API_KEY` (and the matching ASR provider/base URL/model) before voice transcription. Do not copy the Mac `.env` blindly if it contains Mac-only settings. The Windows bridge receives microphone PCM from the StickS3 over Wi-Fi; it does not need to open a Windows microphone. The bridge handles transcription and pastes into the currently focused Windows application.
 
 The StickS3 status dot reports the local agent (Codex/Claude), not bridge reachability. If the bridge is reachable but no supported agent process is running on Windows, StickS3 shows `IDLE`; it shows `OFFLINE` only when the bridge or Wi-Fi is unreachable. The computer name and Wi-Fi connection can still be displayed.

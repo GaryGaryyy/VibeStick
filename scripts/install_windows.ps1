@@ -8,10 +8,24 @@ $BridgeDir = Join-Path $RootDir "bridge"
 $ConfigDir = Join-Path $env:APPDATA "VibeStick"
 $VenvDir = Join-Path $ConfigDir ".venv"
 $BridgeRunnerPath = Join-Path $ConfigDir "run-vibestick-wifi-bridge.cmd"
+$BridgeLogPath = Join-Path $ConfigDir "bridge.log"
 $ConfigEnvPath = Join-Path $ConfigDir ".env"
 $ExampleEnvPath = Join-Path $RootDir ".env.example"
 $SourceEnvPath = Join-Path $RootDir ".env"
 $HudTaskName = "VibeStick HUD"
+
+function Stop-VibeStickBridgeProcesses {
+    $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        $_.ProcessId -ne $PID -and
+        $_.CommandLine -and
+        $_.CommandLine -match '(?i)(-m\s+vibe_stick|vibestick-bridge)' -and
+        $_.CommandLine -match '(?i)--port\s+8765'
+    }
+
+    foreach ($process in $processes) {
+        Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+    }
+}
 
 New-Item -ItemType Directory -Force -Path $ConfigDir | Out-Null
 if (Test-Path $SourceEnvPath) {
@@ -28,6 +42,7 @@ if (-not (Test-Path $VenvDir)) {
 }
 
 $Python = Join-Path $VenvDir "Scripts\python.exe"
+$Pythonw = Join-Path $VenvDir "Scripts\pythonw.exe"
 & $Python -m pip install --upgrade pip
 & $Python -m pip install $BridgeDir
 
@@ -39,7 +54,7 @@ cd /d "$ConfigDir"
 
 $UserId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 $TaskAction = New-ScheduledTaskAction `
-    -Execute $Python `
+    -Execute $Pythonw `
     -Argument "-m vibe_stick --host 0.0.0.0 --port 8765" `
     -WorkingDirectory $ConfigDir
 $TaskTrigger = New-ScheduledTaskTrigger -AtLogOn -User $UserId
@@ -51,10 +66,14 @@ $TaskSettings = New-ScheduledTaskSettingsSet `
     -Hidden `
     -StartWhenAvailable `
     -AllowStartIfOnBatteries `
-    -DontStopIfGoingOnBatteries
+    -DontStopIfGoingOnBatteries `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1)
 
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Stop-ScheduledTask -TaskName $HudTaskName -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 500
+Stop-VibeStickBridgeProcesses
 Register-ScheduledTask `
     -TaskName $TaskName `
     -Action $TaskAction `
@@ -63,7 +82,6 @@ Register-ScheduledTask `
     -Settings $TaskSettings `
     -Force | Out-Null
 
-$Pythonw = Join-Path $VenvDir "Scripts\pythonw.exe"
 $HudAction = New-ScheduledTaskAction `
     -Execute $Pythonw `
     -Argument "-m vibe_stick.windows_hud" `
@@ -93,6 +111,8 @@ Write-Host "Wi-Fi bridge runner:"
 Write-Host $BridgeRunnerPath
 Write-Host "Configuration file:"
 Write-Host $ConfigEnvPath
+Write-Host "Bridge log:"
+Write-Host $BridgeLogPath
 Write-Host "Fill VIBE_STICK_ASR_API_KEY in that file before voice transcription."
 Write-Host "Background task: $TaskName ($TaskState)"
 Write-Host "Recording overlay task: $HudTaskName ($HudTaskState)"

@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.9
+
+- Run the Windows bridge from `pythonw.exe` as a hidden per-user task, write background logs to `%APPDATA%\VibeStick\bridge.log`, restart it after an unexpected exit, and stop stale manual bridge processes during installation.
+
 ## v0.1.8
 
 - Treat cancelled, interrupted, crashed, or unexpectedly stopped agent tasks as errors so the StickS3 plays the error alert sound.

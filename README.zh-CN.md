@@ -116,6 +116,10 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 安装脚本会创建 bridge 和录音提示层两个当前用户的隐藏任务计划并立即启动，所以不需要一直挂着黑色窗口。录音或识别期间才会出现临时提示层，平时完全后台运行。生成的 `%APPDATA%\VibeStick\run-vibestick-wifi-bridge.cmd` 仍然保留，用于手动诊断。
 
+不要用手动诊断窗口代替后台任务；关闭手动 `.cmd` 窗口会停止那个手动进程。后台 bridge 的日志在 `%APPDATA%\VibeStick\bridge.log`。
+
+如果之前是双击 `.cmd` 或直接运行 `python`，请重新运行一次上面的安装脚本。安装脚本会停止旧的手动 bridge，重新注册并启动隐藏后台任务；安装完成后可以关闭 PowerShell 窗口和所有 Python 窗口。
+
 语音转写前，打开 `%APPDATA%\VibeStick\.env`，填写 `VIBE_STICK_ASR_API_KEY`，以及对应的 ASR provider、base URL 和 model。不要直接把包含 Mac 专用配置的 `.env` 复制过来。Windows bridge 接收的是 S3 通过 Wi-Fi 上传的麦克风 PCM，不需要打开 Windows 麦克风；bridge 负责转写，再把结果粘贴到当前获得焦点的 Windows 程序。
 
 S3 上的状态点表示本机 Codex/Claude 是否运行，不表示 bridge 是否在线。如果 bridge 已连接但 Windows 没有受支持的 agent 进程，S3 会显示“待命”；只有 bridge 或 Wi-Fi 不可达时才显示“离线”。电脑名称和 Wi-Fi 仍然可以正常显示。

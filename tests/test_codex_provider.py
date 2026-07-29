@@ -66,6 +66,42 @@ class CodexProviderTests(unittest.TestCase):
         self.assertEqual(observation.alert_type, "DONE")
         self.assertEqual(observation.alert_message, "Codex task completed")
 
+    def test_subagent_completion_does_not_trigger_main_task_alert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sessions = Path(tmp) / "sessions"
+            session = sessions / "subagent.jsonl"
+            session.parent.mkdir(parents=True)
+            timestamp = datetime.now(timezone.utc).isoformat()
+            session.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {
+                            "type": "session_meta",
+                            "thread_source": "subagent",
+                            "parent_thread_id": "parent-thread",
+                        },
+                    }
+                )
+                + "\n"
+                + json.dumps(
+                    {
+                        "type": "event_msg",
+                        "timestamp": timestamp,
+                        "payload": {"type": "task_complete", "message": "subagent done"},
+                    }
+                )
+                + "\n"
+            )
+            with mock.patch.object(local_observer, "SESSIONS_DIR", sessions), mock.patch.object(
+                local_observer, "_codex_process_running", return_value=True
+            ):
+                observation = local_observer.observe_codex(Path(tmp))
+
+        self.assertEqual(observation.status, AgentStatus.IDLE)
+        self.assertEqual(observation.alert_type, "")
+        self.assertIsNone(observation.alert_timestamp)
+
     def test_codex_process_detection_rejects_related_non_agent_commands(self) -> None:
         self.assertFalse(
             _command_is_codex_process(

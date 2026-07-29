@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import platform
 import re
 import subprocess
@@ -101,7 +102,41 @@ def observe_codex(project_root: Path) -> LocalCodexObservation:
 
 
 def _session_files() -> list[Path]:
-    return session_files(SESSIONS_DIR, max_files=MAX_SESSION_FILES)
+    return [
+        path
+        for path in session_files(SESSIONS_DIR, max_files=MAX_SESSION_FILES)
+        if not _is_subagent_session(path)
+    ]
+
+
+def _is_subagent_session(path: Path) -> bool:
+    """Keep child-agent rollouts out of the main Codex status stream."""
+    try:
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            for line_number, line in enumerate(handle):
+                if line_number >= 64:
+                    break
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(event, dict) or event.get("type") != "session_meta":
+                    continue
+                payload = event.get("payload")
+                if not isinstance(payload, dict):
+                    return False
+
+                thread_source = str(payload.get("thread_source") or "").strip().lower()
+                if thread_source:
+                    return thread_source in {"subagent", "sub_agent"}
+
+                source = payload.get("source")
+                if isinstance(source, dict) and "subagent" in source:
+                    return True
+                return bool(payload.get("agent_path") or payload.get("agent_nickname"))
+    except (OSError, UnicodeError):
+        return False
+    return False
 
 
 def _tail_json_events(path: Path) -> list[dict[str, Any]]:

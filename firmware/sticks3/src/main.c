@@ -6,6 +6,7 @@
 
 #include "vibe_audio.h"
 #include "vibe_board.h"
+#include "vibe_input.h"
 #include "vibe_stick_config.h"
 #include "button_gpio.h"
 #include "cJSON.h"
@@ -495,6 +496,16 @@ static void note_user_activity(void)
 {
     s_last_user_activity_ms = now_ms();
     set_display_awake(true);
+}
+
+static bool wake_display_and_consume_input(void)
+{
+    if (!vibe_input_should_wake_only(s_display_awake)) {
+        return false;
+    }
+    note_user_activity();
+    ESP_LOGI(TAG, "woke display and consumed first input");
+    return true;
 }
 
 static void maybe_sleep_display(void)
@@ -1877,6 +1888,9 @@ static void button_single_click_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    if (wake_display_and_consume_input()) {
+        return;
+    }
     note_user_activity();
     queue_event(s_bridge_picker_visible ? VIBE_STICK_EVENT_BRIDGE_SELECT : VIBE_STICK_EVENT_SHORT_PRESS);
 }
@@ -1885,6 +1899,9 @@ static void button_double_click_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    if (wake_display_and_consume_input()) {
+        return;
+    }
     note_user_activity();
     if (s_bridge_picker_visible) {
         queue_event(VIBE_STICK_EVENT_BRIDGE_SELECT);
@@ -1897,6 +1914,9 @@ static void side_button_single_click_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    if (wake_display_and_consume_input()) {
+        return;
+    }
     note_user_activity();
     queue_event(s_bridge_picker_visible ? VIBE_STICK_EVENT_BRIDGE_NEXT : VIBE_STICK_EVENT_PROVIDER_NEXT);
 }
@@ -1905,6 +1925,9 @@ static void side_button_long_start_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    if (wake_display_and_consume_input()) {
+        return;
+    }
     note_user_activity();
     queue_event(VIBE_STICK_EVENT_BRIDGE_SCAN);
 }
@@ -1913,6 +1936,9 @@ static void button_long_start_cb(void *button_handle, void *usr_data)
 {
     (void)button_handle;
     (void)usr_data;
+    if (wake_display_and_consume_input()) {
+        return;
+    }
     note_user_activity();
     if (s_bridge_picker_visible) {
         queue_event(VIBE_STICK_EVENT_BRIDGE_SELECT);

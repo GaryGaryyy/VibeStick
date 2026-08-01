@@ -10,6 +10,10 @@ VibeStick 把 M5Stack StickS3 变成一个桌面 AI agent 小终端：显示状�
 
 VibeStick 面向 M5Stack StickS3，不是 M5Stack 官方项目。Codex、Claude 等第三方 agent 名称只用于说明本地兼容工具和集成。
 
+本分支支持由 Bridge 在服务器端调用 Sub2-Usage，缓存 Codex 与 Claude 的 5H/7D 剩余额度后再发送给 StickS3。Token 不进入固件；固件会优先显示接口的 `account_name`，字段暂缺时显示账号编号。
+
+当前固件与 Bridge 的完整更新记录：[VibeStick 0.1.6](docs/releases/0.1.6.md)。
+
 ## 开始前的准备
 
 - [ ] M5 StickS3｜一根 USB-C 数据线｜一台电脑（最好是Mac）
@@ -20,6 +24,28 @@ VibeStick 面向 M5Stack StickS3，不是 M5Stack 官方项目。Codex、Claude 
 ## 安装
 
 你可以手动执行，也可以交给 AI 编程 agent，例如 Claude Code 和 Codex。
+
+### Windows bridge 快速启动
+
+Windows 支持运行 Python bridge、读取本机 Codex / Claude 状态、接收 StickS3 上传的音频，以及把转写结果粘贴到当前窗口。macOS HUD 和 Mac 本机麦克风回退仍然仅限 macOS；Windows 使用 StickS3 自带麦克风上传的音频。
+
+在 PowerShell 中运行：
+
+```powershell
+git clone https://github.com/GaryGaryyy/VibeStick.git
+cd VibeStick
+.\scripts\setup.ps1
+```
+
+然后填写 `firmware\sticks3\include\vibe_stick_secrets.h` 中的 Wi-Fi 信息，并在 `.env` 中填写 ASR API key。启动 bridge：
+
+```powershell
+.\scripts\dev.ps1
+```
+
+Windows 防火墙首次询问时，需要允许专用网络访问，否则 StickS3 无法连接电脑的 8765 端口。可在浏览器打开 `http://127.0.0.1:8765/health` 检查 bridge；看到 `"ok": true` 表示服务已启动。
+
+固件仍需 ESP-IDF v5.5.x。Windows 可使用 Espressif 官方 ESP-IDF Installation Manager 安装工具链，然后在 ESP-IDF PowerShell 中进入 `firmware\sticks3` 执行 `idf.py build flash`。
 
 > 说明：标 👤 的步骤是需要人亲自动手的物理操作，例如插线、长按/短按电源键、在系统设置里授权。AI agent 请按顺序执行 shell 步骤，执行到 👤 步骤时暂停，让用户完成后再继续。
 
@@ -166,7 +192,25 @@ open -e .env
 - `VIBE_STICK_RECORDING_USE_MAC_MIC`：设为 `0` 可关闭 Mac 麦克风兜底。
 - `VIBE_STICK_AUTO_ENTER`：设为 `1` 会在粘贴后自动按 Return。
 
-### ASR 方案 1：SiliconFlow（默认推荐）
+### StickS3 电源行为
+
+- 屏幕背光会在 30 秒后熄灭；这只是待机，不是关机。
+- 使用电池时，连续 60 分钟无操作会触发 PMIC 关机。关机前先释放 Wi-Fi、音频、LCD 和未使用的 IMU 电源轨；若 PMIC 没有真正切断 ESP32-S3 电源，则自动进入深度睡眠兜底。
+- 双击侧面的复位/电源键才是硬件关机。长按会进入下载模式，等待刷机期间仍会耗电。
+
+### ASR 方案 1：局域网 FunASR（最低延迟）
+
+StickS3 录音结束后，bridge 会把 WAV 直接发送到局域网 FunASR WebSocket 服务。无需 API Key，并可从配套接口定期读取热词和标准化规则。
+
+```sh
+VIBE_STICK_ASR_PROVIDER=local-funasr
+VIBE_STICK_ASR_BASE_URL=ws://192.168.31.100:10095
+VIBE_STICK_FUNASR_HOTWORDS_URL=http://192.168.31.100:10096/api/hotwords
+VIBE_STICK_FUNASR_CHUNK_DELAY_MS=2
+VIBE_STICK_ASR_LANGUAGE=zh
+```
+
+### ASR 方案 2：SiliconFlow
 
 ```sh
 VIBE_STICK_ASR_PROVIDER=openai-compatible
@@ -180,7 +224,7 @@ VIBE_STICK_ASR_ATTEMPTS=2
 
 使用云端 ASR 时，音频会离开本机 Mac。
 
-### ASR 方案 2：任意 OpenAI 兼容服务
+### ASR 方案 3：任意 OpenAI 兼容服务
 
 只要服务支持 `POST {base_url}/audio/transcriptions` 即可。
 
@@ -200,7 +244,7 @@ VIBE_STICK_ASR_API_KEY=your-groq-key
 
 旧别名 `VIBE_STICK_GROQ_API_KEY`、`VIBE_STICK_GROQ_MODEL`、`VIBE_STICK_GROQ_LANGUAGE` 仍然支持。
 
-### ASR 方案 3：本地命令（离线）
+### ASR 方案 4：本地命令（离线）
 
 ```sh
 VIBE_STICK_TRANSCRIBE_CMD=/path/to/transcribe-command

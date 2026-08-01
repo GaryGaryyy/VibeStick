@@ -13,7 +13,7 @@ VibeStick 面向 M5Stack StickS3，不是 M5Stack 官方项目。Codex、Claude 
 ## 开始前的准备
 
 - [ ] M5 StickS3｜一根 USB-C 数据线｜一台电脑（最好是Mac）
-- [ ] Wi-Fi（必须2.4GHz）名称｜Wi-Fi密码｜语音识别模型 API Key，模型名称，base_url
+- [ ] Wi-Fi（必须2.4GHz）名称｜Wi-Fi密码｜语音识别模型 API Key，模型名称，base_url （推荐使用硅基流动有免费额度：https://cloud.siliconflow.cn/i/7ZCoy9fU）
 -  如要显示 Claude 5H/7D 用量（该功能默认关闭）。需要 Claude Code CLI（在终端运行 `claude` 后执行 `/login`），并在 `.env` 中设置 `VIBE_STICK_CLAUDE_USAGE=on`。
 
 
